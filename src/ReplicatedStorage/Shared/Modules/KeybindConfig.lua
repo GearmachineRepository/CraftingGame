@@ -15,6 +15,7 @@ KeybindConfig.Keybinds = {
 		Drag = Enum.UserInputType.MouseButton1,
 		DistanceModifier = Enum.KeyCode.Q,
 		Cancel = Enum.KeyCode.Escape,
+		Drop = Enum.KeyCode.G,
 	},
 	Controller = {
 		Interact = Enum.KeyCode.ButtonX,
@@ -26,7 +27,7 @@ KeybindConfig.Keybinds = {
 	Mobile = {
 		Interact = "TouchTap",
 		Drag = "TouchHold",
-		Drop = "TouchHold",
+		Drop = "DropButton",
 		Cancel = "TouchDoubleTap",
 	},
 } :: {[string]: PlatformKeybinds}
@@ -49,13 +50,14 @@ local DISPLAY_NAMES: {[string]: string} = {
 	TouchTap = "Tap",
 	TouchHold = "Hold",
 	TouchDoubleTap = "Double Tap",
+	DropButton = "Drop Button",
 }
 
 function KeybindConfig.GetKeybind(Platform: string, Action: string): (Enum.KeyCode | Enum.UserInputType | string)?
 	local PlatformKeybindData = KeybindConfig.Keybinds[Platform]
 	if PlatformKeybindData then
 		return (PlatformKeybindData :: any)[Action]
-	end
+end
 	return nil
 end
 

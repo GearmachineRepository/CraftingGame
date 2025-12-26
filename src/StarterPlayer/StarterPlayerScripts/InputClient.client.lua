@@ -4,6 +4,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local SoundService = game:GetService("SoundService")
 local UserInputService = game:GetService("UserInputService")
+local ContextActionService = game:GetService("ContextActionService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Modules = Shared:WaitForChild("Modules")
@@ -17,7 +18,7 @@ local Packets = require(Networking:WaitForChild("Packets"))
 
 local INTERACTION_TAG: string = "Interactable"
 local INTERACTION_DISTANCE: number = 8
-local LONG_PRESS_TIME: number = 0.45
+local DROP_ACTION_NAME: string = "DropItem"
 
 local Player: Player = Players.LocalPlayer
 
@@ -26,8 +27,7 @@ local PromptLabel: TextLabel? = nil
 local UpdateLoop: any = nil
 local CurrentPlatform: string = "PC"
 local CurrentBillboard: BillboardGui? = nil
-local TouchStartTime: number = 0
-local PendingInteractable: Instance? = nil
+local DropButtonBound: boolean = false
 
 local RaycastParameters = RaycastParams.new()
 RaycastParameters.FilterType = Enum.RaycastFilterType.Exclude
@@ -339,6 +339,54 @@ local function PlayInteractSound()
 	end
 end
 
+local function HandleDropAction(_ActionName: string, InputState: Enum.UserInputState, _InputObject: InputObject): Enum.ContextActionResult
+	if InputState ~= Enum.UserInputState.Begin then
+		return Enum.ContextActionResult.Pass
+	end
+
+	local Character = Player.Character
+	if not Character then
+		return Enum.ContextActionResult.Pass
+	end
+
+	local EquippedTool = Character:FindFirstChildWhichIsA("Tool")
+	if EquippedTool then
+		Packets.Drop:Fire()
+		return Enum.ContextActionResult.Sink
+	end
+
+	return Enum.ContextActionResult.Pass
+end
+
+local function UpdateDropButton()
+	local Character = Player.Character
+	if not Character then
+		if DropButtonBound then
+			ContextActionService:UnbindAction(DROP_ACTION_NAME)
+			DropButtonBound = false
+		end
+		return
+	end
+
+	local EquippedTool = Character:FindFirstChildWhichIsA("Tool")
+	local ShouldShowButton = EquippedTool ~= nil and (CurrentPlatform == "Mobile" or CurrentPlatform == "Controller")
+
+	if ShouldShowButton and not DropButtonBound then
+		ContextActionService:BindAction(
+			DROP_ACTION_NAME,
+			HandleDropAction,
+			true,
+			Enum.KeyCode.ButtonY
+		)
+		ContextActionService:SetTitle(DROP_ACTION_NAME, "Drop")
+		ContextActionService:SetPosition(DROP_ACTION_NAME, UDim2.new(1, -70, 0, 50))
+		DropButtonBound = true
+	elseif not ShouldShowButton and DropButtonBound then
+		ContextActionService:UnbindAction(DROP_ACTION_NAME)
+		DropButtonBound = false
+	end
+end
+
 local function OnInteractionInput(InputData: InputObject, GameProcessed: boolean)
 	if GameProcessed then
 		return
@@ -364,16 +412,17 @@ local function OnInteractionInput(InputData: InputObject, GameProcessed: boolean
 						or string.find(ObjectName, "dynamicthumbstick")
 						or string.find(ObjectName, "joystick")
 						or string.find(ObjectName, "movepad")
-						or string.find(ObjectName, "dpad") then
+						or string.find(ObjectName, "dpad")
+						or string.find(ObjectName, "dropitem") then
 						TouchedUI = true
 						break
 					end
 				end
 			end
 
-			if not TouchedUI then
-				TouchStartTime = tick()
-				PendingInteractable = NearestInteractable
+			if not TouchedUI and NearestInteractable then
+				PlayInteractSound()
+				Packets.Interact:Fire(NearestInteractable)
 			end
 		end
 	else
@@ -394,38 +443,10 @@ local function OnInteractionInput(InputData: InputObject, GameProcessed: boolean
 	end
 end
 
-local function OnInteractionInputEnded(InputData: InputObject, GameProcessed: boolean)
-	if GameProcessed then
-		return
-	end
-
-	if CurrentPlatform == "Mobile" and InputData.UserInputType == Enum.UserInputType.Touch then
-		local CurrentTime = tick()
-		local HoldDuration = CurrentTime - TouchStartTime
-
-		if HoldDuration >= LONG_PRESS_TIME then
-			local Character = Player.Character
-			local HoldingTool = Character and Character:FindFirstChildWhichIsA("Tool")
-
-			if HoldingTool then
-				Packets.Drop:Fire()
-			elseif PendingInteractable then
-				PlayInteractSound()
-				Packets.Interact:Fire(PendingInteractable)
-			end
-		else
-			if PendingInteractable then
-				PlayInteractSound()
-				Packets.Interact:Fire(PendingInteractable)
-			end
-		end
-
-		PendingInteractable = nil
-	end
-end
-
 local function OnPlatformChanged(NewPlatform: string)
 	CurrentPlatform = NewPlatform
+
+	UpdateDropButton()
 
 	if NearestInteractable and CurrentBillboard and CurrentBillboard.Enabled then
 		local InteractionText = GetInteractionText(NearestInteractable)
@@ -441,17 +462,23 @@ local function OnPlatformChanged(NewPlatform: string)
 	end
 end
 
+local function OnCharacterChildChanged()
+	UpdateDropButton()
+end
+
 local function Initialize()
 	CurrentPlatform = PlatformManager.GetPlatform() or "PC"
 
 	CreateBillboardUI()
 	PlatformManager.OnPlatformChanged(OnPlatformChanged)
 
-	UpdateLoop = LoopManager.Create(UpdateInteractionPrompt, LoopManager.Rates.UI)
+	UpdateLoop = LoopManager.Create(function()
+		UpdateInteractionPrompt()
+		UpdateDropButton()
+	end, LoopManager.Rates.UI)
 	UpdateLoop:Start()
 
 	UserInputService.InputBegan:Connect(OnInteractionInput)
-	UserInputService.InputEnded:Connect(OnInteractionInputEnded)
 end
 
 local function Cleanup()
@@ -466,16 +493,27 @@ local function Cleanup()
 		PromptLabel = nil
 	end
 
+	if DropButtonBound then
+		ContextActionService:UnbindAction(DROP_ACTION_NAME)
+		DropButtonBound = false
+	end
+
 	NearestInteractable = nil
 end
 
-Player.CharacterAdded:Connect(function()
+Player.CharacterAdded:Connect(function(Character: Model)
 	task.wait(1)
 	Initialize()
+
+	Character.ChildAdded:Connect(OnCharacterChildChanged)
+	Character.ChildRemoved:Connect(OnCharacterChildChanged)
 end)
 
 Player.CharacterRemoving:Connect(Cleanup)
 
 if Player.Character then
 	Initialize()
+
+	Player.Character.ChildAdded:Connect(OnCharacterChildChanged)
+	Player.Character.ChildRemoved:Connect(OnCharacterChildChanged)
 end

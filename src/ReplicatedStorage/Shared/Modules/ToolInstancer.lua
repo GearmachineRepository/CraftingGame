@@ -10,6 +10,29 @@ local INTERACTION_TAG: string = "Interactable"
 local Assets = ReplicatedStorage:WaitForChild("Assets")
 local Items = Assets:WaitForChild("Items")
 
+local PHYSICS_CONSTRAINT_TYPES: {string} = {
+	"AlignPosition",
+	"AlignOrientation",
+}
+
+local function CleanupPhysicsConstraints(Target: Instance)
+	for _, Child in Target:GetChildren() do
+		if Child:IsA("BasePart") then
+			for _, ConstraintType in PHYSICS_CONSTRAINT_TYPES do
+				local Constraint = Child:FindFirstChildOfClass(ConstraintType)
+				if Constraint then
+					Constraint:Destroy()
+				end
+			end
+
+			local DragAttachment = Child:FindFirstChild("DragAttachment")
+			if DragAttachment then
+				DragAttachment:Destroy()
+			end
+		end
+	end
+end
+
 function ToolInstancer.ItemExists(ItemName: string): boolean
 	return Items:FindFirstChild(ItemName) ~= nil
 end
@@ -47,6 +70,8 @@ function ToolInstancer.Create(Source: Instance | string, Location: CFrame?): Mod
 		return nil
 	end
 
+	CleanupPhysicsConstraints(SourceObject)
+
 	local NewModel = Instance.new("Model")
 	NewModel.Name = SourceObject.Name
 
@@ -80,20 +105,26 @@ function ToolInstancer.Create(Source: Instance | string, Location: CFrame?): Mod
 		NewModel.PrimaryPart = NewModel:FindFirstChildWhichIsA("BasePart")
 	end
 
-	for _, Part in NewModel:GetChildren() do
-		if Part:IsA("BasePart") then
-			Part.CanCollide = true
-			Part.Anchored = false
-		end
-	end
-
 	local DraggablesFolder = workspace:FindFirstChild("Draggables")
 	local InteractablesFolder = workspace:FindFirstChild("Interactables")
 	NewModel.Parent = DraggablesFolder or InteractablesFolder or workspace
 
 	if NewModel.PrimaryPart then
-		NewModel.PrimaryPart:SetNetworkOwnershipAuto()
 		NewModel:PivotTo(ToolCFrame)
+
+		task.spawn(function()
+			task.wait()
+
+			if not NewModel:IsDescendantOf(workspace) then
+				return
+			end
+
+			if NewModel.PrimaryPart then
+				pcall(function()
+					NewModel.PrimaryPart:SetNetworkOwnershipAuto()
+				end)
+			end
+		end)
 	end
 
 	if ShouldDestroyOriginal then
@@ -125,6 +156,21 @@ function ToolInstancer.Pickup(Player: Player, Object: Instance, Config: any)
 
 			if PrimaryPart then
 				for _, Child in TargetModel:GetChildren() do
+					if Child:IsA("BasePart") then
+						Child.CanCollide = false
+						Child.Anchored = false
+
+						for _, ConstraintType in PHYSICS_CONSTRAINT_TYPES do
+							local Constraint = Child:FindFirstChildOfClass(ConstraintType)
+							if Constraint then
+								Constraint:Destroy()
+							end
+						end
+						local DragAttachment = Child:FindFirstChild("DragAttachment")
+						if DragAttachment then
+							DragAttachment:Destroy()
+						end
+					end
 					Child.Parent = NewTool
 				end
 

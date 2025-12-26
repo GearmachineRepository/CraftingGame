@@ -105,7 +105,6 @@ local function HandleDropRequest(Player: Player)
 	end
 
 	ToolInstancer.Create(EquippedTool, CFrame.new(DropPosition))
-	EquippedTool:Destroy()
 end
 
 local function InitializePlayerData(Player: Player)

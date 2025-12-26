@@ -2,13 +2,13 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Modules = Shared:WaitForChild("Modules")
 local Networking = Shared:WaitForChild("Networking")
 
 local PhysicsGroups = require(Modules:WaitForChild("PhysicsGroups"))
-local LoopManager = require(Modules:WaitForChild("LoopManager"))
 local Packets = require(Networking:WaitForChild("Packets"))
 
 local DRAG_TAG: string = "Drag"
@@ -18,17 +18,29 @@ local DEFAULT_DRAG_RESPONSIVENESS: number = 25
 local MASS_DIVISOR: number = 10
 local POSITION_CHANGE_THRESHOLD: number = 0.1
 
-type DragConnection = {
-	Loop: any,
+type DragState = {
+	Target: Instance,
+	PhysicsPart: BasePart,
 	LastPosition: Vector3,
 }
 
 type PlayerDragData = {
 	TargetCFrame: CFrame,
-	DraggedParts: {[Instance]: DragConnection},
+	DraggedParts: {[Instance]: DragState},
 }
 
 local PlayerData: {[Player]: PlayerDragData} = {}
+local PhysicsConnection: RBXScriptConnection? = nil
+local ActiveDragCount: number = 0
+
+local function GetPhysicsPart(Target: Instance): BasePart?
+	if Target:IsA("Model") then
+		return (Target :: Model).PrimaryPart
+	elseif Target:IsA("BasePart") then
+		return Target :: BasePart
+	end
+	return nil
+end
 
 local function CleanupDragState(Player: Player, Target: Instance)
 	local Data = PlayerData[Player]
@@ -36,23 +48,15 @@ local function CleanupDragState(Player: Player, Target: Instance)
 		return
 	end
 
-	local PhysicsPart: BasePart?
-	if Target:IsA("Model") then
-		PhysicsPart = (Target :: Model).PrimaryPart
-	elseif Target:IsA("BasePart") then
-		PhysicsPart = Target :: BasePart
-	end
-
+	local PhysicsPart = GetPhysicsPart(Target)
 	if not PhysicsPart then
 		return
 	end
 
-	local DragConnection = Data.DraggedParts[Target]
-	if DragConnection then
-		if DragConnection.Loop then
-			DragConnection.Loop:Destroy()
-		end
+	local DragState = Data.DraggedParts[Target]
+	if DragState then
 		Data.DraggedParts[Target] = nil
+		ActiveDragCount = math.max(0, ActiveDragCount - 1)
 	end
 
 	Target:SetAttribute("BeingDragged", nil)
@@ -76,7 +80,7 @@ local function CleanupDragState(Player: Player, Target: Instance)
 	end
 
 	task.delay(DRAG_NETWORK_DELAY, function()
-		if PhysicsPart:IsDescendantOf(workspace) and not PhysicsPart.Anchored and not PhysicsPart:GetAttribute("BeingDragged") then
+		if PhysicsPart and PhysicsPart:IsDescendantOf(workspace) and not PhysicsPart.Anchored and not Target:GetAttribute("BeingDragged") then
 			pcall(function()
 				PhysicsPart:SetNetworkOwnershipAuto()
 			end)
@@ -113,17 +117,28 @@ local function CanPlayerDrag(Player: Player, Target: Instance): boolean
 	return true
 end
 
-local function SetupDragComponents(Target: Instance)
-	local PhysicsPart: BasePart?
+local function SetupOrResetConstraint<T>(PhysicsPart: BasePart, ConstraintClass: string, SetupFunction: (T) -> ()): T
+	local Existing = PhysicsPart:FindFirstChildOfClass(ConstraintClass)
 
-	if Target:IsA("BasePart") then
-		PhysicsPart = Target
-	elseif Target:IsA("Model") then
-		local TargetModel = Target :: Model
-		if not TargetModel.PrimaryPart then
+	if Existing then
+		SetupFunction(Existing :: any)
+		return Existing :: any
+	end
+
+	local NewConstraint = Instance.new(ConstraintClass)
+	SetupFunction(NewConstraint :: any)
+	NewConstraint.Parent = PhysicsPart
+	return NewConstraint :: any
+end
+
+local function SetupDragComponents(Target: Instance)
+	local PhysicsPart = GetPhysicsPart(Target)
+	if not PhysicsPart then
+		if Target:IsA("Model") then
+			local TargetModel = Target :: Model
 			TargetModel.PrimaryPart = TargetModel:FindFirstChildWhichIsA("BasePart")
+			PhysicsPart = TargetModel.PrimaryPart
 		end
-		PhysicsPart = TargetModel.PrimaryPart
 	end
 
 	if not PhysicsPart then
@@ -132,25 +147,69 @@ local function SetupDragComponents(Target: Instance)
 
 	PhysicsGroups.SetToGroup(Target, "Dragging")
 
-	if not PhysicsPart:FindFirstChildOfClass("AlignPosition") then
-		local AlignPosition = Instance.new("AlignPosition")
-		AlignPosition.Mode = Enum.PositionAlignmentMode.OneAttachment
-		AlignPosition.Enabled = false
-		AlignPosition.MaxForce = 40000
-		AlignPosition.Responsiveness = DEFAULT_DRAG_RESPONSIVENESS
-		AlignPosition.MaxVelocity = math.huge
-		AlignPosition.ApplyAtCenterOfMass = true
-		AlignPosition.Parent = PhysicsPart
+	SetupOrResetConstraint(PhysicsPart, "AlignPosition", function(Constraint: AlignPosition)
+		Constraint.Mode = Enum.PositionAlignmentMode.OneAttachment
+		Constraint.Enabled = false
+		Constraint.Attachment0 = nil
+		Constraint.MaxForce = 40000
+		Constraint.Responsiveness = DEFAULT_DRAG_RESPONSIVENESS
+		Constraint.MaxVelocity = math.huge
+		Constraint.ApplyAtCenterOfMass = true
+	end)
+
+	SetupOrResetConstraint(PhysicsPart, "AlignOrientation", function(Constraint: AlignOrientation)
+		Constraint.Mode = Enum.OrientationAlignmentMode.OneAttachment
+		Constraint.Enabled = false
+		Constraint.Attachment0 = nil
+		Constraint.MaxTorque = 40000
+		Constraint.Responsiveness = DEFAULT_DRAG_RESPONSIVENESS
+		Constraint.MaxAngularVelocity = math.huge
+	end)
+end
+
+local function UpdateAllDrags()
+	for _Player, Data in PlayerData do
+		if not Data.TargetCFrame then
+			continue
+		end
+
+		for Target, DragState in Data.DraggedParts do
+			if not Target:IsDescendantOf(workspace) then
+				continue
+			end
+
+			local TargetPosition = Data.TargetCFrame.Position
+			local PositionDelta = (TargetPosition - DragState.LastPosition).Magnitude
+
+			if PositionDelta > POSITION_CHANGE_THRESHOLD then
+				local AlignPosition = DragState.PhysicsPart:FindFirstChildOfClass("AlignPosition")
+				local AlignOrientation = DragState.PhysicsPart:FindFirstChildOfClass("AlignOrientation")
+
+				if AlignPosition then
+					AlignPosition.Position = TargetPosition
+				end
+				if AlignOrientation then
+					AlignOrientation.CFrame = Data.TargetCFrame
+				end
+
+				DragState.LastPosition = TargetPosition
+			end
+		end
+	end
+end
+
+local function StartPhysicsLoop()
+	if PhysicsConnection then
+		return
 	end
 
-	if not PhysicsPart:FindFirstChildOfClass("AlignOrientation") then
-		local AlignOrientation = Instance.new("AlignOrientation")
-		AlignOrientation.Mode = Enum.OrientationAlignmentMode.OneAttachment
-		AlignOrientation.Enabled = false
-		AlignOrientation.MaxTorque = 40000
-		AlignOrientation.Responsiveness = DEFAULT_DRAG_RESPONSIVENESS
-		AlignOrientation.MaxAngularVelocity = math.huge
-		AlignOrientation.Parent = PhysicsPart
+	PhysicsConnection = RunService.Heartbeat:Connect(UpdateAllDrags)
+end
+
+local function StopPhysicsLoop()
+	if PhysicsConnection then
+		PhysicsConnection:Disconnect()
+		PhysicsConnection = nil
 	end
 end
 
@@ -168,23 +227,22 @@ local function StartDragging(Player: Player, Target: Instance)
 		return
 	end
 
-	Target:SetAttribute("LastDetachTime", tick())
-	Target:SetAttribute("BeingDragged", true)
-	Target:SetAttribute("DraggedBy", Player.Name)
-
-	local PhysicsPart: BasePart?
-	if Target:IsA("Model") then
-		PhysicsPart = (Target :: Model).PrimaryPart
-	elseif Target:IsA("BasePart") then
-		PhysicsPart = Target :: BasePart
-	end
-
+	local PhysicsPart = GetPhysicsPart(Target)
 	if not PhysicsPart then
 		return
 	end
 
+	SetupDragComponents(Target)
+
+	Target:SetAttribute("LastDetachTime", tick())
+	Target:SetAttribute("BeingDragged", true)
+	Target:SetAttribute("DraggedBy", Player.Name)
+
 	PhysicsGroups.SetProperty(Target, "Anchored", false)
-	PhysicsPart:SetNetworkOwner(Player)
+
+	pcall(function()
+		PhysicsPart:SetNetworkOwner(Player)
+	end)
 
 	local DragAttachment = Instance.new("Attachment")
 	DragAttachment.Name = DRAG_ATTACHMENT_NAME
@@ -206,30 +264,18 @@ local function StartDragging(Player: Player, Target: Instance)
 		AlignOrientation.Responsiveness = AdjustedResponsiveness
 		AlignOrientation.Enabled = true
 
-		local DragConnection: DragConnection = {
-			Loop = nil,
+		local DragState: DragState = {
+			Target = Target,
+			PhysicsPart = PhysicsPart,
 			LastPosition = Data.TargetCFrame.Position,
 		}
 
-		local UpdateLoop = LoopManager.Create(function()
-			if not Data or not Data.TargetCFrame then
-				return
-			end
+		Data.DraggedParts[Target] = DragState
+		ActiveDragCount = ActiveDragCount + 1
 
-			local TargetPosition = Data.TargetCFrame.Position
-			local PositionDelta = (TargetPosition - DragConnection.LastPosition).Magnitude
-
-			if PositionDelta > POSITION_CHANGE_THRESHOLD then
-				AlignPosition.Position = TargetPosition
-				AlignOrientation.CFrame = Data.TargetCFrame
-				DragConnection.LastPosition = TargetPosition
-			end
-		end, LoopManager.Rates.Physics)
-
-		DragConnection.Loop = UpdateLoop
-		UpdateLoop:Start()
-
-		Data.DraggedParts[Target] = DragConnection
+		if ActiveDragCount == 1 then
+			StartPhysicsLoop()
+		end
 	end
 end
 
@@ -244,6 +290,10 @@ local function StopDragging(Player: Player, Target: Instance)
 	end
 
 	CleanupDragState(Player, Target)
+
+	if ActiveDragCount == 0 then
+		StopPhysicsLoop()
+	end
 end
 
 local function StopAllDragging(Player: Player)
@@ -284,14 +334,15 @@ local function CleanupPlayerData(Player: Player)
 		return
 	end
 
-	for Target, DragConnection in Data.DraggedParts do
-		if DragConnection.Loop then
-			DragConnection.Loop:Destroy()
-		end
+	for Target in Data.DraggedParts do
 		CleanupDragState(Player, Target)
 	end
 
 	PlayerData[Player] = nil
+
+	if ActiveDragCount == 0 then
+		StopPhysicsLoop()
+	end
 end
 
 Packets.DragUpdate.OnServerEvent:Connect(function(Player: Player, TargetCFrame: CFrame)

@@ -26,6 +26,22 @@ local function LoadInteractionModule(ObjectType: string): any?
 	return LoadedModule
 end
 
+local function PreloadAllModules()
+	for _, ModuleScript in InteractionModules:GetChildren() do
+		if ModuleScript:IsA("ModuleScript") then
+			local ObjectType = ModuleScript.Name
+			if not LoadedModules[ObjectType] then
+				local Success, LoadedModule = pcall(require, ModuleScript)
+				if Success then
+					LoadedModules[ObjectType] = LoadedModule
+				else
+					warn("Failed to preload interaction module for " .. ObjectType .. ":", tostring(LoadedModule))
+				end
+			end
+		end
+	end
+end
+
 function InteractionFunctions.ExecuteInteraction(Player: Player, Object: Instance, ObjectType: string, FunctionName: string, Config: any)
 	local InteractionModule = LoadInteractionModule(ObjectType)
 
@@ -58,5 +74,7 @@ function InteractionFunctions.GetAvailableTypes(): {string}
 	end
 	return Types
 end
+
+PreloadAllModules()
 
 return InteractionFunctions

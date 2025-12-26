@@ -1,0 +1,13 @@
+[package]
+name = "jhon/project-boilerplate"
+version = "0.1.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]
+Signal = "sleitnick/signal@1.5.0"
+Promise = "evaera/promise@4.0.0"
+RobloxStateMachine = "prooheckcp/robloxstatemachine@1.1.7"
+Hitbox = "breezy1214/hitbox@4.1.2"
+Packet = "rajden28/suphi-packet-main@1.7.1"
+Janitor = "howmanysmall/janitor@1.18.3"

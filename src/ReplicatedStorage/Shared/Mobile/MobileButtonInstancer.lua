@@ -11,7 +11,6 @@ local MobileButtonConfig = require(MobileModules:WaitForChild("MobileButtonConfi
 local MobileButtonInstancer = {}
 
 local Player: Player = Players.LocalPlayer
-local PlayerGui: PlayerGui? = nil
 
 local ButtonContainer: Frame? = nil
 local ScreenGui: ScreenGui? = nil
@@ -130,59 +129,48 @@ local function CreateButton(Definition: MobileButtonConfig.ButtonDefinition): Im
 end
 
 local function EnsureContainer()
-	print("EnsureContainer called")
-
 	if ButtonContainer and ButtonContainer.Parent then
-		print("Container already exists, returning")
 		return
 	end
 
-	print("Creating new container...")
 
-	local Success, Error = pcall(function()
-		PlayerGui = Player:WaitForChild("PlayerGui", 5)
-		print("PlayerGui:", PlayerGui)
+	local PlayerGui = Player:WaitForChild("PlayerGui", 5)
+	print("PlayerGui:", PlayerGui)
 
-		if not PlayerGui then
-			warn("PlayerGui not found!")
-			return
-		end
-
-		ScreenGui = Instance.new("ScreenGui")
-		ScreenGui.Name = "MobileButtonsGui"
-		ScreenGui.ResetOnSpawn = false
-		ScreenGui.DisplayOrder = 10
-		ScreenGui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
-		ScreenGui.Parent = PlayerGui
-		print("ScreenGui created:", ScreenGui)
-
-		ButtonContainer = Instance.new("Frame")
-		ButtonContainer.Name = "ButtonContainer"
-		ButtonContainer.BackgroundTransparency = 1
-		ButtonContainer.Visible = false
-		ButtonContainer.Parent = ScreenGui
-		print("ButtonContainer created:", ButtonContainer)
-
-		local Layout = Instance.new("UIListLayout")
-		Layout.FillDirection = Enum.FillDirection.Horizontal
-		Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-		Layout.VerticalAlignment = Enum.VerticalAlignment.Center
-		Layout.Padding = UDim.new(0, BUTTON_SPACING)
-		Layout.SortOrder = Enum.SortOrder.LayoutOrder
-		Layout.Parent = ButtonContainer
-
-		if SizeConnection then
-			SizeConnection:Disconnect()
-		end
-
-		SizeConnection = RunService.RenderStepped:Connect(OnScreenSizeChanged)
-		OnScreenSizeChanged()
-		print("Container setup complete")
-	end)
-
-	if not Success then
-		warn("EnsureContainer error:", Error)
+	if not PlayerGui then
+		warn("PlayerGui not found!")
+		return
 	end
+
+	local NewScreenGui = Instance.new("ScreenGui")
+	NewScreenGui.Name = "MobileButtonsGui"
+	NewScreenGui.ResetOnSpawn = false
+	NewScreenGui.DisplayOrder = 10
+	NewScreenGui.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+	NewScreenGui.Parent = PlayerGui
+	ScreenGui = NewScreenGui
+
+	local NewButtonContainer = Instance.new("Frame")
+	NewButtonContainer.Name = "ButtonContainer"
+	NewButtonContainer.BackgroundTransparency = 1
+	NewButtonContainer.Visible = false
+	NewButtonContainer.Parent = NewScreenGui
+	ButtonContainer = NewButtonContainer
+
+	local Layout = Instance.new("UIListLayout")
+	Layout.FillDirection = Enum.FillDirection.Horizontal
+	Layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	Layout.VerticalAlignment = Enum.VerticalAlignment.Center
+	Layout.Padding = UDim.new(0, BUTTON_SPACING)
+	Layout.SortOrder = Enum.SortOrder.LayoutOrder
+	Layout.Parent = NewButtonContainer
+
+	if SizeConnection then
+		SizeConnection:Disconnect()
+	end
+
+	SizeConnection = RunService.RenderStepped:Connect(OnScreenSizeChanged)
+	OnScreenSizeChanged()
 end
 
 function MobileButtonInstancer.RegisterCallback(Action: string, Callback: () -> ())

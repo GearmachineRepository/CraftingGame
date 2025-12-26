@@ -2,51 +2,55 @@
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
--- Modules
-local Modules = ReplicatedStorage:WaitForChild("Modules")
-local SoundModule = require(Modules:WaitForChild("SoundPlayer"))
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Modules = Shared:WaitForChild("Modules")
+
+local SoundPlayer = require(Modules:WaitForChild("SoundPlayer"))
 local ToolInstancer = require(Modules:WaitForChild("ToolInstancer"))
 
--- Constants
 local DRAG_TAG: string = "Drag"
 
-return {
-	StateAFunction = function(player: Player, object: Instance, config: any)
-		-- Make plant draggable
-		CollectionService:AddTag(object, DRAG_TAG)
-		object:SetAttribute("CurrentState", "StateB")
+local UPROOT_VELOCITY_MIN: number = -10
+local UPROOT_VELOCITY_MAX: number = 10
+local UPROOT_HEIGHT_MIN: number = 15
+local UPROOT_HEIGHT_MAX: number = 25
+local UPROOT_ANGULAR_MIN: number = -5
+local UPROOT_ANGULAR_MAX: number = 5
 
-		-- Get the physical part to apply velocity to
+return {
+	StateAFunction = function(_Player: Player, Object: Instance, Config: any)
+		CollectionService:AddTag(Object, DRAG_TAG)
+		Object:SetAttribute("CurrentState", "StateB")
+
 		local PhysicsPart: BasePart?
-		if object:IsA("Model") then
-			PhysicsPart = (object :: Model).PrimaryPart
-		elseif object:IsA("BasePart") then
-			PhysicsPart = object :: BasePart
+		if Object:IsA("Model") then
+			PhysicsPart = (Object :: Model).PrimaryPart
+		elseif Object:IsA("BasePart") then
+			PhysicsPart = Object :: BasePart
 		end
 
 		if PhysicsPart then
 			PhysicsPart.Anchored = false
 
-			local randomDirection = Vector3.new(
-				math.random(-10, 10), 
-				math.random(15, 25),
-				math.random(-10, 10) 
+			local RandomDirection = Vector3.new(
+				math.random(UPROOT_VELOCITY_MIN, UPROOT_VELOCITY_MAX),
+				math.random(UPROOT_HEIGHT_MIN, UPROOT_HEIGHT_MAX),
+				math.random(UPROOT_VELOCITY_MIN, UPROOT_VELOCITY_MAX)
 			)
+			PhysicsPart.AssemblyLinearVelocity = RandomDirection
 
-			PhysicsPart.AssemblyLinearVelocity = randomDirection
-
-			local randomRotation = Vector3.new(
-				math.random(-5, 5),
-				math.random(-5, 5), 
-				math.random(-5, 5)
+			local RandomRotation = Vector3.new(
+				math.random(UPROOT_ANGULAR_MIN, UPROOT_ANGULAR_MAX),
+				math.random(UPROOT_ANGULAR_MIN, UPROOT_ANGULAR_MAX),
+				math.random(UPROOT_ANGULAR_MIN, UPROOT_ANGULAR_MAX)
 			)
-			PhysicsPart.AssemblyAngularVelocity = randomRotation
+			PhysicsPart.AssemblyAngularVelocity = RandomRotation
 		end
 
-		if config.InteractionSound then
-			SoundModule.PlaySound(config.InteractionSound, PhysicsPart)
+		if Config.InteractionSound then
+			SoundPlayer.PlaySound(Config.InteractionSound, PhysicsPart)
 		end
 	end,
 
-	StateBFunction = ToolInstancer.Pickup
+	StateBFunction = ToolInstancer.Pickup,
 }

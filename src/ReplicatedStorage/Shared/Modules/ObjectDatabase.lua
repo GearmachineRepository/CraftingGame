@@ -3,9 +3,21 @@ local ObjectDatabase = {}
 
 local KeybindConfig = require(script.Parent:WaitForChild("KeybindConfig"))
 
---InteractionDistance is optional
+type StateConfig = {
+	Text: string,
+	Function: string,
+}
 
--- Object configurations
+type ObjectConfig = {
+	Type: string,
+	GridFootprint: Vector2?,
+	InteractionSound: string?,
+	ReleaseSound: string?,
+	InteractionDistance: number?,
+	StateA: StateConfig,
+	StateB: StateConfig?,
+}
+
 ObjectDatabase.Objects = {
 	["Blue Flower"] = {
 		Type = "Plant",
@@ -13,11 +25,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9118598470",
 		StateA = {
 			Text = "Uproot - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Red Flower"] = {
@@ -26,11 +38,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9118598470",
 		StateA = {
 			Text = "Uproot - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Wooden Box"] = {
@@ -39,11 +51,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9118598470",
 		StateA = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Long Wooden Box"] = {
@@ -52,11 +64,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9118598470",
 		StateA = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Large Wooden Box"] = {
@@ -65,11 +77,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9118598470",
 		StateA = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Blue Potion"] = {
@@ -78,11 +90,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9114618924",
 		StateA = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Red Potion"] = {
@@ -91,11 +103,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9114618924",
 		StateA = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Purple Potion"] = {
@@ -104,24 +116,11 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://9114618924",
 		StateA = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateAFunction"
+			Function = "StateAFunction",
 		},
 		StateB = {
 			Text = "Pickup - {INTERACT}",
-			Function = "StateBFunction"
-		},
-	},
-	["Small Cart"] = {
-		Type = "Cart",
-		InteractionSound = "rbxassetid://95897689644876",
-		ReleaseSound = "rbxassetid://95897689644876",
-		StateA = {
-			Text = "Pull - {INTERACT}",
-			Function = "StateAFunction"
-		},
-		StateB = {
-			Text = "Drop - {INTERACT}",
-			Function = "StateBFunction"
+			Function = "StateBFunction",
 		},
 	},
 	["Cauldron"] = {
@@ -129,33 +128,29 @@ ObjectDatabase.Objects = {
 		InteractionSound = "rbxassetid://137256690956022",
 		StateA = {
 			Text = "Begin Brewing - {INTERACT}",
-			Function = "StateAFunction"
-		}
+			Function = "StateAFunction",
+		},
 	},
-}
+} :: {[string]: ObjectConfig}
 
--- Get object configuration
-function ObjectDatabase.GetObjectConfig(objectName: string)
-	return ObjectDatabase.Objects[objectName]
+function ObjectDatabase.GetObjectConfig(ObjectName: string): ObjectConfig?
+	return ObjectDatabase.Objects[ObjectName]
 end
 
--- Get object type
-function ObjectDatabase.GetObjectType(objectName: string): string?
-	local config = ObjectDatabase.GetObjectConfig(objectName)
-	return config and config.Type
+function ObjectDatabase.GetObjectType(ObjectName: string): string?
+	local Config = ObjectDatabase.GetObjectConfig(ObjectName)
+	return if Config then Config.Type else nil
 end
 
--- Check if object has multiple states
-function ObjectDatabase.HasMultipleStates(objectName: string): boolean
-	local config = ObjectDatabase.GetObjectConfig(objectName)
-	return config and config.StateB ~= nil
+function ObjectDatabase.HasMultipleStates(ObjectName: string): boolean
+	local Config = ObjectDatabase.GetObjectConfig(ObjectName)
+	return Config ~= nil and Config.StateB ~= nil
 end
 
--- Format interaction text with keybind on separate line
-function ObjectDatabase.FormatInteractionText(text: string, platform: string): string
-	local interactKey = KeybindConfig.GetDisplayText(platform, "Interact")
-	local cleanText = string.gsub(text, " %- {INTERACT}", "") -- Remove " - {INTERACT}" part
-	return cleanText .. "\n[" .. interactKey .. "]"
+function ObjectDatabase.FormatInteractionText(Text: string, Platform: string): string
+	local InteractKey = KeybindConfig.GetDisplayText(Platform, "Interact")
+	local CleanText = string.gsub(Text, " %- {INTERACT}", "")
+	return CleanText .. "\n[" .. InteractKey .. "]"
 end
 
 return ObjectDatabase

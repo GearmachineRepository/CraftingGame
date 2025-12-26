@@ -1,193 +1,166 @@
 --!strict
---!optimize 2
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local SoundService = game:GetService("SoundService")
-local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local GuiService = game:GetService("GuiService")
 
--- Modules
-local Modules = ReplicatedStorage:WaitForChild("Modules")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Modules = Shared:WaitForChild("Modules")
+local Networking = Shared:WaitForChild("Networking")
+
 local PlatformManager = require(Modules:WaitForChild("PlatformManager"))
 local KeybindConfig = require(Modules:WaitForChild("KeybindConfig"))
 local ObjectDatabase = require(Modules:WaitForChild("ObjectDatabase"))
+local LoopManager = require(Modules:WaitForChild("LoopManager"))
+local Packets = require(Networking:WaitForChild("Packets"))
 
--- Constants
 local INTERACTION_TAG: string = "Interactable"
 local INTERACTION_DISTANCE: number = 8
-local LOOP_RATE = 1/30
+local LONG_PRESS_TIME: number = 0.45
 
--- Services and Objects
 local Player: Player = Players.LocalPlayer
-local Camera: Camera = workspace.CurrentCamera
 
--- Remote Events
-local Events: Folder = ReplicatedStorage:WaitForChild("Events")
-
-local InteractionEvents: Folder = Events:WaitForChild("InteractionEvents") :: Folder
-local InteractRemote: RemoteEvent = InteractionEvents:WaitForChild("Interact") :: RemoteEvent
-local DropRemote: RemoteEvent = InteractionEvents:WaitForChild("Drop") :: RemoteEvent
-
--- Variables
 local NearestInteractable: Instance? = nil
 local PromptLabel: TextLabel? = nil
-local UpdateConnection: RBXScriptConnection?
+local UpdateLoop: any = nil
 local CurrentPlatform: string = "PC"
 local CurrentBillboard: BillboardGui? = nil
-local LongPressTime: number = 0.45
 local TouchStartTime: number = 0
 local PendingInteractable: Instance? = nil
 
--- Create a billboard
+local RaycastParameters = RaycastParams.new()
+RaycastParameters.FilterType = Enum.RaycastFilterType.Exclude
+
 local function CreateBillboardUI(): BillboardGui
-	local billboard = Instance.new("BillboardGui")
-	billboard.Name = "InteractionPrompt"
-	billboard.Size = UDim2.new(0, 200, 0, 50)
-	billboard.StudsOffset = Vector3.new(0, 3, 0)
-	billboard.LightInfluence = 0
-	billboard.Enabled = false
-	billboard.AlwaysOnTop = true
+	local Billboard = Instance.new("BillboardGui")
+	Billboard.Name = "InteractionPrompt"
+	Billboard.Size = UDim2.fromOffset(200, 50)
+	Billboard.StudsOffset = Vector3.new(0, 3, 0)
+	Billboard.LightInfluence = 0
+	Billboard.Enabled = false
+	Billboard.AlwaysOnTop = true
 
-	local frame = Instance.new("Frame")
-	frame.Size = UDim2.new(1, 0, 1, 0)
-	frame.BackgroundTransparency = 1
-	frame.BackgroundColor3 = Color3.new(0, 0, 0)
-	frame.BorderSizePixel = 0
-	frame.Parent = billboard
+	local Frame = Instance.new("Frame")
+	Frame.Size = UDim2.fromScale(1, 1)
+	Frame.BackgroundTransparency = 1
+	Frame.BackgroundColor3 = Color3.new(0, 0, 0)
+	Frame.BorderSizePixel = 0
+	Frame.Parent = Billboard
 
-	local label = Instance.new("TextLabel")
-	label.Name = "PromptLabel"
-	label.Size = UDim2.new(1, 0, 1, 0)
-	label.BackgroundTransparency = 1
-	label.Text = ""
-	label.TextColor3 = Color3.new(1, 1, 1)
-	label.TextScaled = true
-	label.Font = Enum.Font.SourceSansItalic
-	label.Parent = frame
+	local Label = Instance.new("TextLabel")
+	Label.Name = "PromptLabel"
+	Label.Size = UDim2.fromScale(1, 1)
+	Label.BackgroundTransparency = 1
+	Label.Text = ""
+	Label.TextColor3 = Color3.new(1, 1, 1)
+	Label.TextScaled = true
+	Label.Font = Enum.Font.SourceSansItalic
+	Label.Parent = Frame
 
-	local UIStroke = Instance.new("UIStroke")
-	UIStroke.Thickness = 2
-	UIStroke.BorderStrokePosition = Enum.BorderStrokePosition.Outer
-	UIStroke.Enabled = true
-	UIStroke.Parent = label
+	local Stroke = Instance.new("UIStroke")
+	Stroke.Thickness = 2
+	Stroke.Enabled = true
+	Stroke.Parent = Label
 
-	return billboard
+	return Billboard
 end
 
--- Get position for interaction checks
 local function GetInteractionPosition(): Vector3
-	if not Player.Character then 
-		return Vector3.new(0, 0, 0) 
+	if not Player.Character then
+		return Vector3.new(0, 0, 0)
 	end
 
-	local Head: BasePart? = Player.Character:FindFirstChild("Head") :: BasePart
-	return Head and Head.Position or Player.Character:GetPivot().Position
+	local Head: BasePart? = Player.Character:FindFirstChild("Head") :: BasePart?
+	return if Head then Head.Position else Player.Character:GetPivot().Position
 end
 
-local raycastParams = RaycastParams.new()
-raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-
--- Check if object is in line of sight
-local function IsInLineOfSight(object: Instance): boolean
+local function IsInLineOfSight(Object: Instance): boolean
 	local PlayerPosition = GetInteractionPosition()
 
-	local filterList: {any} = {}
+	local FilterList: {Instance} = {}
 	if Player.Character then
-		table.insert(filterList, Player.Character)
+		table.insert(FilterList, Player.Character)
 	end
-	raycastParams.FilterDescendantsInstances = filterList
+	RaycastParameters.FilterDescendantsInstances = FilterList
 
-	local function CanSeePosition(targetPosition: Vector3): boolean
-		local direction = (targetPosition - PlayerPosition).Unit
-		local distance = (targetPosition - PlayerPosition).Magnitude
+	local function CanSeePosition(TargetPosition: Vector3): boolean
+		local Direction = (TargetPosition - PlayerPosition).Unit
+		local Distance = (TargetPosition - PlayerPosition).Magnitude
 
-		local raycastResult = workspace:Raycast(PlayerPosition, direction * distance, raycastParams)
+		local RaycastResult = workspace:Raycast(PlayerPosition, Direction * Distance, RaycastParameters)
 
-		if not raycastResult then
+		if not RaycastResult then
 			return true
 		end
 
-		local hitInstance = raycastResult.Instance
-		if object:IsA("Model") and (hitInstance == object or hitInstance:IsDescendantOf(object)) then
+		local HitInstance = RaycastResult.Instance
+		if Object:IsA("Model") and (HitInstance == Object or HitInstance:IsDescendantOf(Object)) then
 			return true
-		elseif object:IsA("BasePart") and hitInstance == object then
+		elseif Object:IsA("BasePart") and HitInstance == Object then
 			return true
 		end
 
 		return false
 	end
 
-	if object:IsA("Model") then
-		local testPositions = {}
+	if Object:IsA("Model") then
+		local TestPositions: {Vector3} = {}
+		table.insert(TestPositions, Object:GetPivot().Position)
 
-		table.insert(testPositions, object:GetPivot().Position)
+		for _, Child in Object:GetChildren() do
+			if Child:IsA("BasePart") then
+				table.insert(TestPositions, Child.Position)
 
-		for _, child in pairs(object:GetChildren()) do
-			if child:IsA("BasePart") then
-				table.insert(testPositions, child.Position)
+				local PartSize = Child.Size
+				local PartCFrame = Child.CFrame
 
-				-- Also test the bounds of larger parts
-				local size = child.Size
-				local cf = child.CFrame
-
-				-- Test corners/edges of the part for better coverage
-				local offsets = {
-					Vector3.new(size.X/2, 0, 0),
-					Vector3.new(-size.X/2, 0, 0),
-					Vector3.new(0, size.Y/2, 0),
-					Vector3.new(0, -size.Y/2, 0),
-					Vector3.new(0, 0, size.Z/2),
-					Vector3.new(0, 0, -size.Z/2)
+				local Offsets = {
+					Vector3.new(PartSize.X / 2, 0, 0),
+					Vector3.new(-PartSize.X / 2, 0, 0),
+					Vector3.new(0, PartSize.Y / 2, 0),
+					Vector3.new(0, -PartSize.Y / 2, 0),
+					Vector3.new(0, 0, PartSize.Z / 2),
+					Vector3.new(0, 0, -PartSize.Z / 2),
 				}
 
-				for _, offset in pairs(offsets) do
-					local worldOffset = cf:VectorToWorldSpace(offset)
-					table.insert(testPositions, cf.Position + worldOffset)
+				for _, Offset in Offsets do
+					local WorldOffset = PartCFrame:VectorToWorldSpace(Offset)
+					table.insert(TestPositions, PartCFrame.Position + WorldOffset)
 				end
 			end
 		end
 
-		for _, position in pairs(testPositions) do
-			if CanSeePosition(position) then
+		for _, Position in TestPositions do
+			if CanSeePosition(Position) then
 				return true
 			end
 		end
 
 		return false
-	elseif object:IsA("BasePart") then
-		return CanSeePosition(object.Position)
+	elseif Object:IsA("BasePart") then
+		return CanSeePosition(Object.Position)
 	end
 
 	return false
 end
 
--- Check if object should show interaction
-local function ShouldShowInteraction(object: Instance): boolean
-	if Player:GetAttribute("Carting") then
-		if object:GetAttribute("Type") ~= "Cart" then
-			return false
-		end
-
-		local owner = object:GetAttribute("Owner")
-		if owner == nil or owner ~= Player.UserId then
-			return false
-		end
-	else
-		local owner = object:GetAttribute("Owner")
-		if owner and owner ~= Player.UserId then
-			return false
-		end
-	end
-
-	if object:GetAttribute("BeingDragged") then
+local function ShouldShowInteraction(Object: Instance): boolean
+	local Owner = Object:GetAttribute("Owner")
+	if Owner and Owner ~= Player.UserId then
 		return false
 	end
-	if object:GetAttribute("Interacting") then
+
+	if Object:GetAttribute("BeingDragged") then
 		return false
 	end
-	if object:GetAttribute("BrewingPlayer") and object:GetAttribute("BrewingPlayer") ~= Player.Name then
+
+	if Object:GetAttribute("Interacting") then
+		return false
+	end
+
+	local BrewingPlayer = Object:GetAttribute("BrewingPlayer")
+	if BrewingPlayer and BrewingPlayer ~= Player.Name then
 		return false
 	end
 
@@ -195,123 +168,132 @@ local function ShouldShowInteraction(object: Instance): boolean
 		return false
 	end
 
-	if not IsInLineOfSight(object) then
+	if not IsInLineOfSight(Object) then
 		return false
 	end
 
 	return true
 end
 
--- Get interaction distance for a specific object
-local function GetInteractionDistance(object: Instance): number
-	local objectConfig = ObjectDatabase.GetObjectConfig(object.Name)
-	if objectConfig and objectConfig.InteractionDistance then
-		return objectConfig.InteractionDistance
+local function GetInteractionDistance(Object: Instance): number
+	local ObjectConfig = ObjectDatabase.GetObjectConfig(Object.Name)
+	if ObjectConfig and ObjectConfig.InteractionDistance then
+		return ObjectConfig.InteractionDistance
 	end
 
-	-- Check for attribute fallback
-	local attributeDistance = object:GetAttribute("InteractionDistance")
-	if attributeDistance and type(attributeDistance) == "number" then
-		return attributeDistance
+	local AttributeDistance = Object:GetAttribute("InteractionDistance")
+	if AttributeDistance and type(AttributeDistance) == "number" then
+		return AttributeDistance
 	end
 
-	-- Use default fallback
 	return INTERACTION_DISTANCE
 end
 
--- Get interaction text for object
-local function GetInteractionText(object: Instance): string?
-	local objectConfig = ObjectDatabase.GetObjectConfig(object.Name)
-	if not objectConfig then
-		-- Fallback to attribute if not in database
-		local fallbackText = object:GetAttribute("InteractionText")
-		if fallbackText then
-			-- Ensure we have a valid platform
-			local platform = CurrentPlatform or "PC"
-			return ObjectDatabase.FormatInteractionText(fallbackText, platform)
+local function GetInteractionText(Object: Instance): string?
+	local ObjectConfig = ObjectDatabase.GetObjectConfig(Object.Name)
+	if not ObjectConfig then
+		local FallbackText = Object:GetAttribute("InteractionText") :: string?
+		if FallbackText then
+			local Platform = CurrentPlatform or "PC"
+			return ObjectDatabase.FormatInteractionText(FallbackText, Platform)
 		end
 		return nil
 	end
 
-	-- Determine current state
-	local currentState = object:GetAttribute("CurrentState") or "StateA"
-	local stateConfig = objectConfig[currentState]
+	local CurrentState = Object:GetAttribute("CurrentState") or "StateA"
+	local StateConfig = (ObjectConfig :: any)[CurrentState]
 
-	if not stateConfig or not stateConfig.Text then
+	if not StateConfig or not StateConfig.Text then
 		return nil
 	end
 
-	-- Format text with platform-specific keybind (with fallback)
-	local platform = CurrentPlatform or "PC"
-	return ObjectDatabase.FormatInteractionText(stateConfig.Text, platform)
+	local Platform = CurrentPlatform or "PC"
+	return ObjectDatabase.FormatInteractionText(StateConfig.Text, Platform)
 end
 
--- Find nearest interactable object
 local function FindNearestInteractable(): Instance?
 	local PlayerPosition = GetInteractionPosition()
 	local ClosestDistance = INTERACTION_DISTANCE
 	local ClosestObject: Instance? = nil
 
-	-- Check all interactable objects
-	for _, object in pairs(CollectionService:GetTagged(INTERACTION_TAG)) do
-		if not ShouldShowInteraction(object) then
+	for _, Object in CollectionService:GetTagged(INTERACTION_TAG) do
+		if not ShouldShowInteraction(Object) then
 			continue
 		end
 
-		-- Skip objects that don't have valid interaction text
-		local InteractionText = GetInteractionText(object)
+		local InteractionText = GetInteractionText(Object)
 		if not InteractionText then
 			continue
 		end
 
 		local ObjectPosition: Vector3
-		if object:IsA("Model") then
-			ObjectPosition = object:GetPivot().Position
-		elseif object:IsA("BasePart") then
-			ObjectPosition = object.Position
+		if Object:IsA("Model") then
+			ObjectPosition = Object:GetPivot().Position
+		elseif Object:IsA("BasePart") then
+			ObjectPosition = Object.Position
 		else
 			continue
 		end
 
 		local Distance = (PlayerPosition - ObjectPosition).Magnitude
-		local ObjectInteractionDistance = GetInteractionDistance(object)
-		
-		if Distance < ClosestDistance then
-			if Distance <= ObjectInteractionDistance then
-				ClosestDistance = Distance
-				ClosestObject = object
-			end
+		local ObjectInteractionDistance = GetInteractionDistance(Object)
+
+		if Distance < ClosestDistance and Distance <= ObjectInteractionDistance then
+			ClosestDistance = Distance
+			ClosestObject = Object
 		end
 	end
 
 	return ClosestObject
 end
 
--- Update interaction prompt
-local LastRate = tick()
-local function UpdateInteractionPrompt(): ()
-	if tick() - LastRate >= LOOP_RATE then
-		LastRate = tick()
+local function IsInputMatchingKeybind(InputData: InputObject, KeybindValue: any): boolean
+	if KeybindValue == nil then
+		return false
 	end
-	
+
+	if typeof(KeybindValue) == "EnumItem" then
+		local EnumType = KeybindValue.EnumType
+
+		if EnumType == Enum.KeyCode then
+			return InputData.KeyCode == (KeybindValue :: Enum.KeyCode)
+		end
+
+		if EnumType == Enum.UserInputType then
+			return InputData.UserInputType == (KeybindValue :: Enum.UserInputType)
+		end
+
+		return false
+	end
+
+	return false
+end
+
+local function UpdateInteractionPrompt()
 	local NewNearest = FindNearestInteractable()
 
 	if NewNearest ~= NearestInteractable then
 		NearestInteractable = NewNearest
-		
+
 		if NearestInteractable then
-			-- Move billboard to new object
 			if not CurrentBillboard then
 				CurrentBillboard = CreateBillboardUI()
 			end
-			
-			if not CurrentBillboard then return end
+
+			if not CurrentBillboard then
+				return
+			end
 
 			local BillboardFrame = CurrentBillboard:FindFirstChild("Frame")
-			if not BillboardFrame then return end
+			if not BillboardFrame then
+				return
+			end
+
 			PromptLabel = BillboardFrame:FindFirstChild("PromptLabel") :: TextLabel
-			if not PromptLabel then return end
-			
+			if not PromptLabel then
+				return
+			end
+
 			CurrentBillboard.Parent = NearestInteractable
 			local InteractionText = GetInteractionText(NearestInteractable)
 			if InteractionText then
@@ -321,20 +303,23 @@ local function UpdateInteractionPrompt(): ()
 				CurrentBillboard.Enabled = false
 			end
 		else
-			-- Hide billboard
 			if CurrentBillboard then
 				CurrentBillboard.Enabled = false
 			end
 		end
 	elseif NearestInteractable and CurrentBillboard and CurrentBillboard.Enabled then
-		-- Same object, but check if state changed (for drag state updates)
 		local InteractionText = GetInteractionText(NearestInteractable)
-		
+
 		local BillboardFrame = CurrentBillboard:FindFirstChild("Frame")
-		if not BillboardFrame then return end
+		if not BillboardFrame then
+			return
+		end
+
 		PromptLabel = BillboardFrame:FindFirstChild("PromptLabel") :: TextLabel
-		if not PromptLabel then return end
-		
+		if not PromptLabel then
+			return
+		end
+
 		if InteractionText and PromptLabel.Text ~= InteractionText then
 			PromptLabel.Text = InteractionText
 		elseif not InteractionText then
@@ -343,137 +328,136 @@ local function UpdateInteractionPrompt(): ()
 	end
 end
 
--- Handle interaction input (InputBegan)
-local function OnInteractionInput(input: InputObject, gameProcessed: boolean): ()
-	if gameProcessed then return end
+local function PlayInteractSound()
+	local SoundEffects = SoundService:FindFirstChild("Sound Effects")
+	if SoundEffects then
+		local InteractSound = SoundEffects:FindFirstChild("Interact")
+		if InteractSound and InteractSound:IsA("Sound") then
+			InteractSound.PlaybackSpeed = 1 + (math.random() / 10)
+			InteractSound:Play()
+		end
+	end
+end
 
-	-- Get platform-specific interact keybind
+local function OnInteractionInput(InputData: InputObject, GameProcessed: boolean)
+	if GameProcessed then
+		return
+	end
+
 	local InteractKeybind = KeybindConfig.GetKeybind(CurrentPlatform, "Interact")
 	local DropKeybind = KeybindConfig.GetKeybind(CurrentPlatform, "Drop")
 
-	-- Check if input matches interact keybind
-	local IsInteractInput = false
 	if CurrentPlatform == "Mobile" then
-		if input.UserInputType == Enum.UserInputType.Touch and input.UserInputState == Enum.UserInputState.Begin then
-			local touchPosition = input.Position
-			local touchedUI = false
+		if InputData.UserInputType == Enum.UserInputType.Touch and InputData.UserInputState == Enum.UserInputState.Begin then
+			local TouchPosition = InputData.Position
+			local TouchedUI = false
 
-			-- Try to get UI objects at position (may fail in some cases)
-			local success, guiObjects = pcall(function()
-				return game.Players.LocalPlayer.PlayerGui:GetGuiObjectsAtPosition(touchPosition.X, touchPosition.Y)
+			local Success, GuiObjects = pcall(function()
+				return Player.PlayerGui:GetGuiObjectsAtPosition(TouchPosition.X, TouchPosition.Y)
 			end)
 
-			if success and guiObjects then
-				-- Check if touch is on movement controls or other UI
-				for _, guiObject in ipairs(guiObjects) do
-					local objName = guiObject.Name:lower()
+			if Success and GuiObjects then
+				for _, GuiObject in GuiObjects do
+					local ObjectName = string.lower(GuiObject.Name)
 
-					-- Only block specific control elements, not the container frame
-					if objName:find("thumbstick") or 
-						objName:find("dynamicthumbstick") or
-						objName:find("joystick") or
-						objName:find("movepad") or
-						objName:find("dpad") then
-						touchedUI = true
+					if string.find(ObjectName, "thumbstick")
+						or string.find(ObjectName, "dynamicthumbstick")
+						or string.find(ObjectName, "joystick")
+						or string.find(ObjectName, "movepad")
+						or string.find(ObjectName, "dpad") then
+						TouchedUI = true
 						break
 					end
 				end
 			end
 
-			if not touchedUI then
-				-- Track touch start time and store potential interaction
+			if not TouchedUI then
 				TouchStartTime = tick()
 				PendingInteractable = NearestInteractable
 			end
 		end
 	else
-		-- Non-mobile platforms - immediate interaction
-		IsInteractInput = input.KeyCode == InteractKeybind or input.UserInputType == InteractKeybind
+		local IsInteractInput = IsInputMatchingKeybind(InputData, InteractKeybind)
 
 		if IsInteractInput and NearestInteractable then
-			SoundService["Sound Effects"].Interact.PlaybackSpeed = 1 * (math.random()/10)
-			SoundService["Sound Effects"].Interact:Play()
-			InteractRemote:FireServer(NearestInteractable)
+			PlayInteractSound()
+			Packets.Interact:Fire(NearestInteractable)
 		end
 	end
 
-	-- Controller drop input
 	if CurrentPlatform == "Controller" then
-		if DropKeybind and input.KeyCode == DropKeybind then
-			DropRemote:FireServer()
+		local IsDropInput = IsInputMatchingKeybind(InputData, DropKeybind)
+
+		if IsDropInput then
+			Packets.Drop:Fire()
 		end
 	end
 end
 
--- Handle input ended (separate function for InputEnded)
-local function OnInteractionInputEnded(input: InputObject, gameProcessed: boolean): ()
-	if gameProcessed then return end
+local function OnInteractionInputEnded(InputData: InputObject, GameProcessed: boolean)
+	if GameProcessed then
+		return
+	end
 
-	if CurrentPlatform == "Mobile" and input.UserInputType == Enum.UserInputType.Touch then
-		-- Touch ended - determine if it was a long press or short tap
-		local currentTime = tick()
-		local holdDuration = currentTime - TouchStartTime
+	if CurrentPlatform == "Mobile" and InputData.UserInputType == Enum.UserInputType.Touch then
+		local CurrentTime = tick()
+		local HoldDuration = CurrentTime - TouchStartTime
 
-		if holdDuration >= LongPressTime then
-			-- Long press - try to drop item first, then interact
-			local character = game.Players.LocalPlayer.Character
-			local holdingTool = character and character:FindFirstChildWhichIsA("Tool")
+		if HoldDuration >= LONG_PRESS_TIME then
+			local Character = Player.Character
+			local HoldingTool = Character and Character:FindFirstChildWhichIsA("Tool")
 
-			if holdingTool then
-				DropRemote:FireServer()
+			if HoldingTool then
+				Packets.Drop:Fire()
 			elseif PendingInteractable then
-				SoundService["Sound Effects"].Interact.PlaybackSpeed = 1 * (math.random()/10)
-				SoundService["Sound Effects"].Interact:Play()
-				InteractRemote:FireServer(PendingInteractable)
+				PlayInteractSound()
+				Packets.Interact:Fire(PendingInteractable)
 			end
 		else
-			-- Short tap - interact only
 			if PendingInteractable then
-				SoundService["Sound Effects"].Interact.PlaybackSpeed = 1 * (math.random()/10)
-				SoundService["Sound Effects"].Interact:Play()
-				InteractRemote:FireServer(PendingInteractable)
+				PlayInteractSound()
+				Packets.Interact:Fire(PendingInteractable)
 			end
 		end
+
 		PendingInteractable = nil
 	end
 end
 
--- Handle platform switching
-local function OnPlatformChanged(newPlatform: string): ()
-	CurrentPlatform = newPlatform
+local function OnPlatformChanged(NewPlatform: string)
+	CurrentPlatform = NewPlatform
 
-	-- Update prompt text for new platform immediately
 	if NearestInteractable and CurrentBillboard and CurrentBillboard.Enabled then
 		local InteractionText = GetInteractionText(NearestInteractable)
-		if InteractionText then
-			if CurrentBillboard then
-				local BillboardFrame = CurrentBillboard:FindFirstChild("Frame")
-				if not BillboardFrame then return end
+		if InteractionText and CurrentBillboard then
+			local BillboardFrame = CurrentBillboard:FindFirstChild("Frame")
+			if BillboardFrame then
 				PromptLabel = BillboardFrame:FindFirstChild("PromptLabel") :: TextLabel
-				if not PromptLabel then return end
-				PromptLabel.Text = InteractionText
+				if PromptLabel then
+					PromptLabel.Text = InteractionText
+				end
 			end
 		end
 	end
 end
 
--- Initialize
-local function Initialize(): ()
-	-- Get current platform from PlatformManager
+local function Initialize()
 	CurrentPlatform = PlatformManager.GetPlatform() or "PC"
 
 	CreateBillboardUI()
 	PlatformManager.OnPlatformChanged(OnPlatformChanged)
-	UpdateConnection = RunService.Heartbeat:Connect(UpdateInteractionPrompt)
+
+	UpdateLoop = LoopManager.Create(UpdateInteractionPrompt, LoopManager.Rates.UI)
+	UpdateLoop:Start()
+
 	UserInputService.InputBegan:Connect(OnInteractionInput)
 	UserInputService.InputEnded:Connect(OnInteractionInputEnded)
 end
 
--- Cleanup
-local function Cleanup(): ()
-	if UpdateConnection then
-		UpdateConnection:Disconnect()
-		UpdateConnection = nil
+local function Cleanup()
+	if UpdateLoop then
+		UpdateLoop:Destroy()
+		UpdateLoop = nil
 	end
 
 	if CurrentBillboard then
@@ -485,15 +469,13 @@ local function Cleanup(): ()
 	NearestInteractable = nil
 end
 
--- Character events
 Player.CharacterAdded:Connect(function()
-	task.wait(1) -- Wait for character to fully load
+	task.wait(1)
 	Initialize()
 end)
 
 Player.CharacterRemoving:Connect(Cleanup)
 
--- Initialize if character already exists
 if Player.Character then
 	Initialize()
 end

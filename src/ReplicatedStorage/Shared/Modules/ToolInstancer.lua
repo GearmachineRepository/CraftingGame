@@ -1,179 +1,162 @@
+--!strict
 local ToolInstancer = {}
 
--- Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 
--- Modules
-local SoundPlayer = require(script.Parent:WaitForChild("SoundPlayer"))
-
--- Constants
 local DRAG_TAG: string = "Drag"
 local INTERACTION_TAG: string = "Interactable"
 
--- Assets
 local Assets = ReplicatedStorage:WaitForChild("Assets")
 local Items = Assets:WaitForChild("Items")
 
--- check if an item exists in the Items folder
-function ToolInstancer.ItemExists(itemName: string): boolean
-	return Items:FindFirstChild(itemName) ~= nil
+function ToolInstancer.ItemExists(ItemName: string): boolean
+	return Items:FindFirstChild(ItemName) ~= nil
 end
 
--- get all available item names
 function ToolInstancer.GetAvailableItems(): {string}
-	local itemNames = {}
-	for _, item in pairs(Items:GetChildren()) do
-		table.insert(itemNames, item.Name)
+	local ItemNames: {string} = {}
+	for _, Item in Items:GetChildren() do
+		table.insert(ItemNames, Item.Name)
 	end
-	return itemNames
+	return ItemNames
 end
 
-function ToolInstancer.Create(object: Instance | string, Location: CFrame?): Model?
-	local sourceObject: Instance?
-	local shouldDestroyOriginal = false
+function ToolInstancer.Create(Source: Instance | string, Location: CFrame?): Model?
+	local SourceObject: Instance?
+	local ShouldDestroyOriginal = false
 
-	if type(object) == "string" then
-		local itemName = object :: string
-		local itemTemplate = Items:FindFirstChild(itemName)
+	if type(Source) == "string" then
+		local ItemName = Source
+		local ItemTemplate = Items:FindFirstChild(ItemName)
 
-		if not itemTemplate then
-			warn("Item '" .. itemName .. "' not found in Items folder")
+		if not ItemTemplate then
+			warn("Item '" .. ItemName .. "' not found in Items folder")
 			return nil
 		end
 
-		-- Clone the item template
-		sourceObject = itemTemplate:Clone()
-		shouldDestroyOriginal = false -- Don't destroy the template
+		SourceObject = ItemTemplate:Clone()
+		ShouldDestroyOriginal = false
 	else
-		-- Handle Instance input
-		sourceObject = object :: Instance
-		shouldDestroyOriginal = true -- Destroy the original object
+		SourceObject = Source
+		ShouldDestroyOriginal = true
 	end
 
-	if not sourceObject then
+	if not SourceObject then
 		warn("No valid source object provided")
 		return nil
 	end
 
-	local model = Instance.new("Model")
-	model.Name = sourceObject.Name
+	local NewModel = Instance.new("Model")
+	NewModel.Name = SourceObject.Name
 
-	local handle: BasePart? = sourceObject:FindFirstChild("Handle") :: BasePart?
+	local HandlePart: BasePart? = SourceObject:FindFirstChild("Handle") :: BasePart?
+	local ToolCFrame: CFrame = if HandlePart then HandlePart.CFrame else CFrame.new()
 
-	
-	local toolCFrame: CFrame = handle and handle.CFrame or CFrame.new()
 	if Location then
-		toolCFrame = Location
+		ToolCFrame = Location
 	end
 
-	-- Move/copy all children from source to model
-	local childrenToMove = {}
-	for _, child in pairs(sourceObject:GetChildren()) do
-		table.insert(childrenToMove, child)
+	local ChildrenToMove: {Instance} = {}
+	for _, Child in SourceObject:GetChildren() do
+		table.insert(ChildrenToMove, Child)
 	end
 
-	for _, child in pairs(childrenToMove) do
-		-- For string-based creation, we're working with a clone, so we can move directly
-		-- For instance-based creation, we're moving from the original
-		child.Parent = model
+	for _, Child in ChildrenToMove do
+		Child.Parent = NewModel
 
-		if child == handle then
-			child.Name = "Handle" 
-			if child:IsA("BasePart") then
-				child.CanCollide = true
-				child.Anchored = false
+		if Child == HandlePart then
+			Child.Name = "Handle"
+			if Child:IsA("BasePart") then
+				Child.CanCollide = true
+				Child.Anchored = false
 			end
 		end
 	end
 
-	-- Set primary part
-	if handle and handle.Parent == model then
-		model.PrimaryPart = handle
+	if HandlePart and HandlePart.Parent == NewModel then
+		NewModel.PrimaryPart = HandlePart
 	else
-		model.PrimaryPart = model:FindFirstChildWhichIsA("BasePart")
+		NewModel.PrimaryPart = NewModel:FindFirstChildWhichIsA("BasePart")
 	end
 
-	-- Set collision properties for all parts
-	for _, part in pairs(model:GetChildren()) do
-		if part:IsA("BasePart") then
-			part.CanCollide = true
-			part.Anchored = false
+	for _, Part in NewModel:GetChildren() do
+		if Part:IsA("BasePart") then
+			Part.CanCollide = true
+			Part.Anchored = false
 		end
 	end
 
-	model.Parent = workspace:FindFirstChild("Draggables") or workspace:FindFirstChild("Interactables")
+	local DraggablesFolder = workspace:FindFirstChild("Draggables")
+	local InteractablesFolder = workspace:FindFirstChild("Interactables")
+	NewModel.Parent = DraggablesFolder or InteractablesFolder or workspace
 
-	-- Set position
-	if model.PrimaryPart then
-		model.PrimaryPart:SetNetworkOwnershipAuto()
-		model:PivotTo(toolCFrame)
+	if NewModel.PrimaryPart then
+		NewModel.PrimaryPart:SetNetworkOwnershipAuto()
+		NewModel:PivotTo(ToolCFrame)
 	end
 
-	-- Clean up original if needed
-	if shouldDestroyOriginal then
-		sourceObject:Destroy()
+	if ShouldDestroyOriginal then
+		SourceObject:Destroy()
 	end
 
-	-- Add attributes and tags
-	model:SetAttribute("CurrentState", "StateB")
-	CollectionService:AddTag(model, DRAG_TAG)
-	CollectionService:AddTag(model, INTERACTION_TAG)
+	NewModel:SetAttribute("CurrentState", "StateB")
+	CollectionService:AddTag(NewModel, DRAG_TAG)
+	CollectionService:AddTag(NewModel, INTERACTION_TAG)
 
-	return model
+	return NewModel
 end
 
-function ToolInstancer.Pickup(player: Player, object: Instance, config: any): ()
-	local tool: Tool
-	local objectName = object.Name
+function ToolInstancer.Pickup(Player: Player, Object: Instance, Config: any)
+	local NewTool: Tool
+	local ObjectName = Object.Name
 
-	local existingTool = Items:FindFirstChild(objectName)
-	if existingTool and existingTool:IsA("Tool") then
-		tool = existingTool:Clone()
+	local ExistingTool = Items:FindFirstChild(ObjectName)
+	if ExistingTool and ExistingTool:IsA("Tool") then
+		NewTool = ExistingTool:Clone()
 	else
-		tool = Instance.new("Tool")
-		tool.Name = objectName
-		tool.RequiresHandle = true
+		NewTool = Instance.new("Tool")
+		NewTool.Name = ObjectName
+		NewTool.RequiresHandle = true
 
-		if object:IsA("Model") then
-			local primaryPart = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart")
-			if primaryPart then
-				
-				for _, child in pairs(object:GetChildren()) do
-					child.Parent = tool
+		if Object:IsA("Model") then
+			local TargetModel = Object :: Model
+			local PrimaryPart = TargetModel.PrimaryPart or TargetModel:FindFirstChildWhichIsA("BasePart")
+
+			if PrimaryPart then
+				for _, Child in TargetModel:GetChildren() do
+					Child.Parent = NewTool
 				end
-				
-				local handle = tool:FindFirstChild(primaryPart.Name)
-				if handle and handle:IsA("BasePart") then
-					handle.Name = "Handle"
-					handle.CanCollide = false
-					handle.Anchored = false
+
+				local Handle = NewTool:FindFirstChild(PrimaryPart.Name)
+				if Handle and Handle:IsA("BasePart") then
+					Handle.Name = "Handle"
+					Handle.CanCollide = false
+					Handle.Anchored = false
 				end
 			end
-		elseif object:IsA("BasePart") then
-			-- Clone the part as the handle
-			local handle = object:Clone()
-			handle.Name = "Handle"
-			handle.CanCollide = false
-			handle.Anchored = false
-			handle.Parent = tool
+		elseif Object:IsA("BasePart") then
+			local Handle = Object:Clone()
+			Handle.Name = "Handle"
+			Handle.CanCollide = false
+			Handle.Anchored = false
+			Handle.Parent = NewTool
 		end
 
-		-- Set tool properties based on config or defaults
-		if config then
-			tool.ToolTip = config.ToolTip or objectName
-			if config.TextureId then
-				tool.TextureId = config.TextureId
+		if Config then
+			NewTool.ToolTip = Config.ToolTip or ObjectName
+			if Config.TextureId then
+				NewTool.TextureId = Config.TextureId
 			end
 		else
-			tool.ToolTip = objectName
+			NewTool.ToolTip = ObjectName
 		end
 	end
-	
-	tool.Parent = player.Backpack
 
-	if object:IsDescendantOf(workspace) then
-		object:Destroy()
+	NewTool.Parent = Player.Backpack
+
+	if Object:IsDescendantOf(workspace) then
+		Object:Destroy()
 	end
 end
 

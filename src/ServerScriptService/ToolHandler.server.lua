@@ -1,107 +1,116 @@
 --!strict
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local CollectionService = game:GetService("CollectionService")
 
--- Modules
-local Modules = ReplicatedStorage:WaitForChild("Modules")
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Modules = Shared:WaitForChild("Modules")
+local Networking = Shared:WaitForChild("Networking")
+
 local ToolInstancer = require(Modules:WaitForChild("ToolInstancer"))
+local Packets = require(Networking:WaitForChild("Packets"))
 
--- Assets
-local Assets = ReplicatedStorage:WaitForChild("Assets")
-local Items = Assets:WaitForChild("Items")
+type ToolConnectionData = {[number]: RBXScriptConnection}
 
--- Remote Events
-local Events: Folder = ReplicatedStorage:WaitForChild("Events") :: Folder
-local InteractionEvents: Folder = Events:WaitForChild("InteractionEvents") :: Folder
-local DropRemote: RemoteEvent = InteractionEvents:WaitForChild("Drop") :: RemoteEvent
+type ToolEntry = {
+	Tool: Tool?,
+	Connections: ToolConnectionData,
+}
 
--- Types
-type ConnectionData = {[number]: RBXScriptConnection}
-type ToolData = {[Instance]: {Tool: Tool?, Connections: ConnectionData}}
-type PlayerData = {[Player]: {
-	Tools: ToolData,
-}}
+type PlayerToolData = {
+	Tools: {[Instance]: ToolEntry},
+}
 
--- Constants
-local DRAG_TAG: string = "Drag"
-local INTERACTION_TAG: string = "Interactable"
+local PlayerData: {[Player]: PlayerToolData} = {}
 
--- Player Data Storage
-local PlayerData: PlayerData = {}
+local DROP_DISTANCE: number = 3
+local DROP_BUFFER: number = 0.5
 
-local function HookEvent(Table: ConnectionData, Event: RBXScriptConnection): ()
-	table.insert(Table, Event)
+local RaycastParameters = RaycastParams.new()
+RaycastParameters.FilterType = Enum.RaycastFilterType.Exclude
+
+local function HookEvent(ConnectionTable: ToolConnectionData, Connection: RBXScriptConnection)
+	table.insert(ConnectionTable, Connection)
 end
 
-local function SetupTool(Player: Player, Child: Tool): ()
-	local ToolData: ToolData = PlayerData[Player].Tools
-	if not ToolData[Child] then
-		ToolData[Child] = {Tool = Child, Connections = {}}
+local function SetupTool(Player: Player, NewTool: Tool)
+	local Data = PlayerData[Player]
+	if not Data then
+		return
 	end
-	
-	HookEvent(ToolData[Child].Connections, Child.Equipped:Connect(function()
 
-	end))
-	HookEvent(ToolData[Child].Connections, Child.Unequipped:Connect(function()
+	if not Data.Tools[NewTool] then
+		Data.Tools[NewTool] = {
+			Tool = NewTool,
+			Connections = {},
+		}
+	end
 
+	local ToolEntry = Data.Tools[NewTool]
+
+	HookEvent(ToolEntry.Connections, NewTool.Equipped:Connect(function()
 	end))
-	HookEvent(ToolData[Child].Connections, Child.Activated:Connect(function()
-		
+
+	HookEvent(ToolEntry.Connections, NewTool.Unequipped:Connect(function()
+	end))
+
+	HookEvent(ToolEntry.Connections, NewTool.Activated:Connect(function()
 	end))
 end
 
-local function CleanupTool(Player: Player, Child: Tool): ()
-	local ToolData: ToolData = PlayerData[Player].Tools
+local function CleanupTool(Player: Player, OldTool: Tool)
+	local Data = PlayerData[Player]
+	if not Data then
+		return
+	end
 
-	-- Disconnect connections first
-	if ToolData[Child] then
-		for Index, Connection: RBXScriptConnection in pairs(ToolData[Child].Connections) do
+	local ToolEntry = Data.Tools[OldTool]
+	if ToolEntry then
+		for _, Connection in ToolEntry.Connections do
 			if Connection then
 				Connection:Disconnect()
 			end
 		end
-		ToolData[Child] = {Tool = nil, Connections = {}}
+		Data.Tools[OldTool] = nil
 	end
 end
 
-local raycastParams = RaycastParams.new()
-raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-
-local function DropRequest(Player: Player)
+local function HandleDropRequest(Player: Player)
 	local Character = Player.Character
-	if Character then
-		local Root = Character.PrimaryPart
-		if not Root then return end
-
-		local Tool = Character:FindFirstChildWhichIsA("Tool")
-		if Tool then
-			local rootPosition = Root.Position
-			local rootLookVector = Root.CFrame.LookVector
-			local dropDistance = 3 -- studs in front of character
-			local dropPosition = rootPosition + (rootLookVector * dropDistance)
-
-			raycastParams.FilterDescendantsInstances = {Character}
-
-			local raycastResult = workspace:Raycast(rootPosition, rootLookVector * dropDistance, raycastParams)
-
-			if raycastResult then
-				local hitDistance = (raycastResult.Position - rootPosition).Magnitude
-				local safeDistance = math.max(0.5, hitDistance - 0.5) -- Leave 0.5 stud buffer
-				dropPosition = rootPosition + (rootLookVector * safeDistance)
-			end
-			
-			ToolInstancer.Create(Tool, CFrame.new(dropPosition))
-			Tool:Destroy()
-		end
+	if not Character then
+		return
 	end
+
+	local RootPart = Character.PrimaryPart
+	if not RootPart then
+		return
+	end
+
+	local EquippedTool = Character:FindFirstChildWhichIsA("Tool")
+	if not EquippedTool then
+		return
+	end
+
+	local RootPosition = RootPart.Position
+	local LookVector = RootPart.CFrame.LookVector
+	local DropPosition = RootPosition + (LookVector * DROP_DISTANCE)
+
+	RaycastParameters.FilterDescendantsInstances = {Character}
+
+	local RaycastResult = workspace:Raycast(RootPosition, LookVector * DROP_DISTANCE, RaycastParameters)
+
+	if RaycastResult then
+		local HitDistance = (RaycastResult.Position - RootPosition).Magnitude
+		local SafeDistance = math.max(DROP_BUFFER, HitDistance - DROP_BUFFER)
+		DropPosition = RootPosition + (LookVector * SafeDistance)
+	end
+
+	ToolInstancer.Create(EquippedTool, CFrame.new(DropPosition))
+	EquippedTool:Destroy()
 end
 
--- Initialize Player Data
-local function InitializePlayerData(Player: Player): ()
-
+local function InitializePlayerData(Player: Player)
 	PlayerData[Player] = {
-		Tools = {}
+		Tools = {},
 	}
 
 	Player.CharacterAdded:Connect(function(Character)
@@ -110,6 +119,7 @@ local function InitializePlayerData(Player: Player): ()
 				SetupTool(Player, Child)
 			end
 		end)
+
 		Character.ChildRemoved:Connect(function(Child: Instance)
 			if Child:IsA("Tool") then
 				CleanupTool(Player, Child)
@@ -118,31 +128,27 @@ local function InitializePlayerData(Player: Player): ()
 	end)
 end
 
--- Cleanup Player Data
-local function CleanupPlayerData(Player: Player): ()
+local function CleanupPlayerData(Player: Player)
 	local Data = PlayerData[Player]
-	if not Data then return end
+	if not Data then
+		return
+	end
 
 	PlayerData[Player] = nil
 end
 
--- Player Connection Events
+Packets.Drop.OnServerEvent:Connect(HandleDropRequest)
+
 Players.PlayerAdded:Connect(InitializePlayerData)
 Players.PlayerRemoving:Connect(CleanupPlayerData)
 
--- Events
-DropRemote.OnServerEvent:Connect(DropRequest)
-
--- Initialize existing players
-for _, Player: Player in pairs(Players:GetPlayers()) do
+for _, Player in Players:GetPlayers() do
 	InitializePlayerData(Player)
 end
 
--- Monitor workspace for dropped tools
-workspace.ChildAdded:Connect(function(child)
-	if child:IsA("Tool") then
+workspace.ChildAdded:Connect(function(Child)
+	if Child:IsA("Tool") then
 		task.wait(0.1)
-
-		ToolInstancer.Create(child)
+		ToolInstancer.Create(Child)
 	end
 end)

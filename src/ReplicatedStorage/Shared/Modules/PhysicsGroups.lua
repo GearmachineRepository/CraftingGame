@@ -1,50 +1,45 @@
 --!strict
---!optimize 2
-local Module = {}
-
 local PhysicsService = game:GetService("PhysicsService")
 
--- Types
-type CollisionRules = {[number]: {[number]: string | boolean}}
-type Rule = {[number]: string | boolean}
+local PhysicsGroups = {}
 
--- Physics Groups Configuration
-local PhysicsGroups: {[number]: string} = {
-	[1] = "Dragging", 
-	[2] = "Characters"
+local GROUP_NAMES: {string} = {
+	"Dragging",
+	"Characters",
 }
 
--- Collision Rules: {Group1, Group2, CanCollide}
-local CollisionRules: CollisionRules = {
-	{"Dragging", "Characters", false}
+type CollisionRule = {string | boolean}
+
+local COLLISION_RULES: {CollisionRule} = {
+	{"Dragging", "Characters", false},
 }
 
--- Initialize Physics Groups
-for Index: number, GroupName: string in pairs(PhysicsGroups) do
+for _, GroupName in GROUP_NAMES do
 	pcall(function()
 		PhysicsService:RegisterCollisionGroup(GroupName)
 	end)
 end
 
--- Apply collision rules
-for _, Rule: Rule in pairs(CollisionRules) do
-	PhysicsService:CollisionGroupSetCollidable(Rule[1], Rule[2], Rule[3])
+for _, Rule in COLLISION_RULES do
+	local GroupA = Rule[1] :: string
+	local GroupB = Rule[2] :: string
+	local CanCollide = Rule[3] :: boolean
+	PhysicsService:CollisionGroupSetCollidable(GroupA, GroupB, CanCollide)
 end
 
--- Set all BaseParts in an instance to a specific collision group
-function Module.SetToGroup(InstanceToSet: Instance, GroupName: string): ()
-	if not InstanceToSet then return end
+function PhysicsGroups.SetToGroup(Target: Instance, GroupName: string)
+	if not Target then
+		return
+	end
 
-	-- Handle single BasePart
-	if InstanceToSet:IsA("BasePart") then
+	if Target:IsA("BasePart") then
 		pcall(function()
-			InstanceToSet.CollisionGroup = GroupName
+			Target.CollisionGroup = GroupName
 		end)
 		return
 	end
 
-	-- Handle descendants
-	for _, Descendant: Instance in pairs(InstanceToSet:GetDescendants()) do
+	for _, Descendant in Target:GetDescendants() do
 		if Descendant:IsA("BasePart") then
 			pcall(function()
 				Descendant.CollisionGroup = GroupName
@@ -53,27 +48,25 @@ function Module.SetToGroup(InstanceToSet: Instance, GroupName: string): ()
 	end
 end
 
-function Module.SetProperty(InstanceToSet: Instance, Property: string, Value: any)
-	if not InstanceToSet then return end
+function PhysicsGroups.SetProperty(Target: Instance, PropertyName: string, Value: any)
+	if not Target then
+		return
+	end
 
-	-- Handle single BasePart
-	if InstanceToSet:IsA("BasePart") then
+	if Target:IsA("BasePart") then
 		pcall(function()
-			local Part: BasePart = InstanceToSet :: BasePart
-			(Part :: any)[Property] = Value
+			(Target :: any)[PropertyName] = Value
 		end)
 		return
 	end
 
-	-- Handle descendants
-	for _, Descendant: Instance in pairs(InstanceToSet:GetDescendants()) do
+	for _, Descendant in Target:GetDescendants() do
 		if Descendant:IsA("BasePart") then
 			pcall(function()
-				local Part: BasePart = Descendant :: BasePart
-				(Part :: any)[Property] = Value
+				(Descendant :: any)[PropertyName] = Value
 			end)
 		end
 	end
 end
 
-return Module
+return PhysicsGroups

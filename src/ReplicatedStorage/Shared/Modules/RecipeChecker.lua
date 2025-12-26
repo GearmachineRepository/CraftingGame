@@ -1,90 +1,84 @@
 --!strict
 local RecipeChecker = {}
+
 local Recipes = require(script.Parent:WaitForChild("Recipes"))
 
--- Types
 type IngredientList = {[string]: number}
 type RecipeVariation = IngredientList
-type RecipeIngredients = IngredientList | {RecipeVariation}
-export type RecipeList = {
-	name: string,
-	recipe: any,
-	ingredients: {string},
-	ingredientCounts: {[string]: number},
-	matchedVariation: IngredientList?,
-	modelsToDestroy: {Model|Instance}?
+
+export type RecipeResult = {
+	Name: string,
+	Recipe: any,
+	Ingredients: {string},
+	IngredientCounts: {[string]: number},
+	MatchedVariation: IngredientList?,
+	ModelsToDestroy: {Model | Instance}?,
 }
 
-
--- Helper function to get the name/type of an object
-local function GetObjectType(object: Instance): string?
-	if object:IsA("Model") then
-		return object.Name
-	elseif object:IsA("BasePart") then
-		local parentModel = object:FindFirstAncestorOfClass("Model")
-		if parentModel and parentModel:IsDescendantOf(workspace.Draggables) then
-			return parentModel.Name
+local function GetObjectType(Object: Instance): string?
+	if Object:IsA("Model") then
+		return Object.Name
+	elseif Object:IsA("BasePart") then
+		local ParentModel = Object:FindFirstAncestorOfClass("Model")
+		if ParentModel and ParentModel:IsDescendantOf(workspace:FindFirstChild("Draggables")) then
+			return ParentModel.Name
 		end
-		return object.Name
-	elseif object:IsA("Tool") then
-		return object.Name
+		return Object.Name
+	elseif Object:IsA("Tool") then
+		return Object.Name
 	end
 	return nil
 end
 
--- Extract ingredients from parts found in bounds
-local function ExtractIngredients(parts: {Instance})
-	local ingredients = {}
-	local ingredientCounts = {}
-	local ingredientModels = {}
+local function ExtractIngredients(Parts: {Instance}): ({string}, {[string]: number}, {[string]: {Instance}})
+	local IngredientNames: {string} = {}
+	local IngredientCounts: {[string]: number} = {}
+	local IngredientModels: {[string]: {Instance}} = {}
+	local SeenModels: {[Instance]: boolean} = {}
 
-	local seenModels = {}
+	for _, Part in Parts do
+		local TargetModel: Instance? = nil
 
-	for _, part in pairs(parts) do
-		local model = nil
-		if part:IsA("Model") then
-			model = part
-		elseif part:IsA("BasePart") then
-			model = part:FindFirstAncestorOfClass("Model") :: Model
-		elseif part:IsA("Tool") then
-			model = part
+		if Part:IsA("Model") or Part:IsA("Tool") then
+			TargetModel = Part
+		elseif Part:IsA("BasePart") then
+			TargetModel = Part:FindFirstAncestorOfClass("Model")
 		end
 
-		if model and not seenModels[model] then
-			seenModels[model] = true
-			local objectType = GetObjectType(model)
+		if TargetModel and not SeenModels[TargetModel] then
+			SeenModels[TargetModel] = true
+			local ObjectType = GetObjectType(TargetModel)
 
-			if objectType then
-				ingredientCounts[objectType] = (ingredientCounts[objectType] or 0) + 1
+			if ObjectType then
+				IngredientCounts[ObjectType] = (IngredientCounts[ObjectType] or 0) + 1
 
-				if not ingredientModels[objectType] then
-					ingredientModels[objectType] = {}
+				if not IngredientModels[ObjectType] then
+					IngredientModels[ObjectType] = {}
 				end
-				table.insert(ingredientModels[objectType], model)
+				table.insert(IngredientModels[ObjectType], TargetModel)
 
-				if not table.find(ingredients, objectType) then
-					table.insert(ingredients, objectType)
+				if not table.find(IngredientNames, ObjectType) then
+					table.insert(IngredientNames, ObjectType)
 				end
 			end
 		end
 	end
 
-	return ingredients, ingredientCounts, ingredientModels
+	return IngredientNames, IngredientCounts, IngredientModels
 end
 
--- Check if ingredients match a single recipe variation
-local function DoesVariationMatch(variation: IngredientList, ingredientCounts: {[string]: number}, strictMatch: boolean): boolean
-	for ingredient, requiredAmount in pairs(variation) do
-		local availableAmount = ingredientCounts[ingredient] or 0
-		if availableAmount < requiredAmount then
+local function DoesVariationMatch(Variation: IngredientList, IngredientCounts: {[string]: number}, StrictMatch: boolean): boolean
+	for IngredientName, RequiredAmount in Variation do
+		local AvailableAmount = IngredientCounts[IngredientName] or 0
+		if AvailableAmount < RequiredAmount then
 			return false
 		end
 	end
 
-	if strictMatch then
-		for ingredient, availableAmount in pairs(ingredientCounts) do
-			local requiredAmount = variation[ingredient] or 0
-			if requiredAmount == 0 then
+	if StrictMatch then
+		for IngredientName, _AvailableAmount in IngredientCounts do
+			local RequiredAmount = Variation[IngredientName] or 0
+			if RequiredAmount == 0 then
 				return false
 			end
 		end
@@ -93,56 +87,54 @@ local function DoesVariationMatch(variation: IngredientList, ingredientCounts: {
 	return true
 end
 
--- Check if ingredients match a recipe (supports both old and new format)
-local function DoesRecipeMatch(recipe: any, ingredientCounts: {[string]: number}): (boolean, IngredientList?)
-	local ingredients = recipe.ingredients
-	local strictMatch: boolean = recipe.strictMatch or false
+local function DoesRecipeMatch(RecipeData: any, IngredientCounts: {[string]: number}): (boolean, IngredientList?)
+	local RecipeIngredients = RecipeData.Ingredients
+	local StrictMatch: boolean = RecipeData.StrictMatch or false
 
-	if type(ingredients[1]) == "table" then
-		for _, variation in pairs(ingredients) do
-			if DoesVariationMatch(variation, ingredientCounts, strictMatch) then
-				return true, variation -- Return which variation matched
+	if type(RecipeIngredients[1]) == "table" then
+		for _, Variation in RecipeIngredients do
+			if DoesVariationMatch(Variation, IngredientCounts, StrictMatch) then
+				return true, Variation
 			end
 		end
 		return false, nil
 	else
-		local matches = DoesVariationMatch(ingredients, ingredientCounts, strictMatch)
-		return matches, if matches then ingredients else nil
+		local Matches = DoesVariationMatch(RecipeIngredients, IngredientCounts, StrictMatch)
+		return Matches, if Matches then RecipeIngredients else nil
 	end
 end
 
--- Main function to check recipes for a specific crafting station
-function RecipeChecker.CheckRecipes(stationType: string, parts: {Instance}): RecipeList?
-	local stationRecipes = Recipes[stationType]
-	if not stationRecipes then
-		warn("No recipes found for station type: " .. tostring(stationType))
+function RecipeChecker.CheckRecipes(StationType: string, Parts: {Instance}): RecipeResult?
+	local StationRecipes = Recipes[StationType]
+	if not StationRecipes then
+		warn("No recipes found for station type:", StationType)
 		return nil
 	end
 
-	local ingredients, ingredientCounts, ingredientModels = ExtractIngredients(parts)
+	local IngredientNames, IngredientCounts, IngredientModels = ExtractIngredients(Parts)
 
-	for recipeName, recipe in pairs(stationRecipes) do
-		local matches, matchedVariation = DoesRecipeMatch(recipe, ingredientCounts)
-		if matches and matchedVariation then
-			-- Select only required number of models per ingredient
-			local modelsToDestroy = {}
+	for RecipeName, RecipeData in StationRecipes do
+		local Matches, MatchedVariation = DoesRecipeMatch(RecipeData, IngredientCounts)
 
-			for ingredientName, requiredCount in pairs(matchedVariation) do
-				local availableModels = ingredientModels[ingredientName] or {}
-				for i = 1, requiredCount do
-					if availableModels[i] then
-						table.insert(modelsToDestroy, availableModels[i])
+		if Matches and MatchedVariation then
+			local ModelsToDestroy: {Instance} = {}
+
+			for IngredientName, RequiredCount in MatchedVariation do
+				local AvailableModels = IngredientModels[IngredientName] or {}
+				for Index = 1, RequiredCount do
+					if AvailableModels[Index] then
+						table.insert(ModelsToDestroy, AvailableModels[Index])
 					end
 				end
 			end
 
 			return {
-				name = recipeName,
-				recipe = recipe,
-				ingredients = ingredients,
-				ingredientCounts = ingredientCounts,
-				matchedVariation = matchedVariation,
-				modelsToDestroy = modelsToDestroy
+				Name = RecipeName,
+				Recipe = RecipeData,
+				Ingredients = IngredientNames,
+				IngredientCounts = IngredientCounts,
+				MatchedVariation = MatchedVariation,
+				ModelsToDestroy = ModelsToDestroy,
 			}
 		end
 	end
@@ -150,87 +142,93 @@ function RecipeChecker.CheckRecipes(stationType: string, parts: {Instance}): Rec
 	return nil
 end
 
--- Get all possible recipes for a station
-function RecipeChecker.GetRecipesForStation(stationType: string): {[string]: any}
-	return Recipes[stationType] or {}
+function RecipeChecker.GetRecipesForStation(StationType: string): {[string]: any}
+	return Recipes[StationType] or {}
 end
 
--- Check what recipes are possible with current ingredients
-function RecipeChecker.GetPossibleRecipes(stationType: string, parts: {Instance}): {{name: string, recipe: any, canMake: boolean, matchedVariation: IngredientList?, missingIngredients: {{variation: IngredientList, missing: {{ingredient: string, needed: number}}}}}}
-	local stationRecipes = Recipes[stationType]
-	if not stationRecipes then
+type PossibleRecipe = {
+	Name: string,
+	Recipe: any,
+	CanMake: boolean,
+	MatchedVariation: IngredientList?,
+	MissingIngredients: {{Variation: IngredientList, Missing: {{Ingredient: string, Needed: number}}}},
+}
+
+function RecipeChecker.GetPossibleRecipes(StationType: string, Parts: {Instance}): {PossibleRecipe}
+	local StationRecipes = Recipes[StationType]
+	if not StationRecipes then
 		return {}
 	end
 
-	local ingredients, ingredientCounts = ExtractIngredients(parts)
-	local possibleRecipes: {{name: string, recipe: any, canMake: boolean, matchedVariation: IngredientList?, missingIngredients: any}} = {}
+	local _, IngredientCounts = ExtractIngredients(Parts)
+	local PossibleRecipes: {PossibleRecipe} = {}
 
-	for recipeName, recipe in pairs(stationRecipes) do
-		local recipeIngredients = recipe.ingredients
-		local canMake = false
-		local bestVariation = nil
-		local allMissingIngredients = {}
+	for RecipeName, RecipeData in StationRecipes do
+		local RecipeIngredients = RecipeData.Ingredients
+		local CanMake = false
+		local BestVariation: IngredientList? = nil
+		local AllMissingIngredients: {{Variation: IngredientList, Missing: {{Ingredient: string, Needed: number}}}} = {}
 
-		if type(recipeIngredients[1]) == "table" then
-			for _, variation in pairs(recipeIngredients) do
-				local variationCanMake = true
-				local missingIngredients = {}
+		if type(RecipeIngredients[1]) == "table" then
+			for _, Variation in RecipeIngredients do
+				local VariationCanMake = true
+				local MissingIngredients: {{Ingredient: string, Needed: number}} = {}
 
-				for ingredient, requiredAmount in pairs(variation) do
-					local availableAmount = ingredientCounts[ingredient] or 0
-					if availableAmount < requiredAmount then
-						variationCanMake = false
-						table.insert(missingIngredients, {
-							ingredient = ingredient,
-							needed = requiredAmount - availableAmount
+				for IngredientName, RequiredAmount in Variation do
+					local AvailableAmount = IngredientCounts[IngredientName] or 0
+					if AvailableAmount < RequiredAmount then
+						VariationCanMake = false
+						table.insert(MissingIngredients, {
+							Ingredient = IngredientName,
+							Needed = RequiredAmount - AvailableAmount,
 						})
 					end
 				end
 
-				if variationCanMake then
-					canMake = true
-					bestVariation = variation
+				if VariationCanMake then
+					CanMake = true
+					BestVariation = Variation
 					break
 				else
-					table.insert(allMissingIngredients, {
-						variation = variation,
-						missing = missingIngredients
+					table.insert(AllMissingIngredients, {
+						Variation = Variation,
+						Missing = MissingIngredients,
 					})
 				end
 			end
 		else
-			local missingIngredients = {}
-			canMake = true
+			local MissingIngredients: {{Ingredient: string, Needed: number}} = {}
+			CanMake = true
 
-			for ingredient, requiredAmount in pairs(recipeIngredients) do
-				local availableAmount = ingredientCounts[ingredient] or 0
-				if availableAmount < requiredAmount then
-					canMake = false
-					table.insert(missingIngredients, {
-						ingredient = ingredient,
-						needed = requiredAmount - availableAmount
+			for IngredientName, RequiredAmount in RecipeIngredients do
+				local AvailableAmount = IngredientCounts[IngredientName] or 0
+				if AvailableAmount < RequiredAmount then
+					CanMake = false
+					table.insert(MissingIngredients, {
+						Ingredient = IngredientName,
+						Needed = RequiredAmount - AvailableAmount,
 					})
 				end
 			end
 
-			if not canMake then
-				table.insert(allMissingIngredients, {
-					variation = recipeIngredients,
-					missing = missingIngredients
+			if not CanMake then
+				table.insert(AllMissingIngredients, {
+					Variation = RecipeIngredients,
+					Missing = MissingIngredients,
 				})
 			end
 		end
 
-		table.insert(possibleRecipes, {
-			name = recipeName,
-			recipe = recipe,
-			canMake = canMake,
-			matchedVariation = bestVariation,
-			missingIngredients = allMissingIngredients
+		table.insert(PossibleRecipes, {
+			Name = RecipeName,
+			Recipe = RecipeData,
+			CanMake = CanMake,
+			MatchedVariation = BestVariation,
+			MissingIngredients = AllMissingIngredients,
 		})
 	end
 
-	return possibleRecipes
+	return PossibleRecipes
 end
 
 return RecipeChecker

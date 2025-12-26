@@ -1,77 +1,76 @@
 --!strict
 local KeybindConfig = {}
 
--- Platform-specific keybinds
+type PlatformKeybinds = {
+	Interact: Enum.KeyCode | Enum.UserInputType | string,
+	Drag: Enum.KeyCode | Enum.UserInputType | string,
+	DistanceModifier: Enum.KeyCode | Enum.UserInputType | string?,
+	Cancel: Enum.KeyCode | Enum.UserInputType | string,
+	Drop: (Enum.KeyCode | Enum.UserInputType | string)?,
+}
+
 KeybindConfig.Keybinds = {
 	PC = {
 		Interact = Enum.KeyCode.E,
 		Drag = Enum.UserInputType.MouseButton1,
 		DistanceModifier = Enum.KeyCode.Q,
-		Cancel = Enum.KeyCode.Escape
+		Cancel = Enum.KeyCode.Escape,
 	},
 	Controller = {
 		Interact = Enum.KeyCode.ButtonX,
 		Drag = Enum.KeyCode.ButtonL2,
 		DistanceModifier = Enum.KeyCode.ButtonR2,
 		Cancel = Enum.KeyCode.ButtonB,
-		Drop = Enum.KeyCode.ButtonY
+		Drop = Enum.KeyCode.ButtonY,
 	},
 	Mobile = {
 		Interact = "TouchTap",
 		Drag = "TouchHold",
 		Drop = "TouchHold",
-		Cancel = "TouchDoubleTap"
-	}
+		Cancel = "TouchDoubleTap",
+	},
+} :: {[string]: PlatformKeybinds}
+
+local DISPLAY_NAMES: {[string]: string} = {
+	MouseButton1 = "Left Click",
+	MouseButton2 = "Right Click",
+	MouseButton3 = "Middle Click",
+	Return = "Enter",
+	LeftShift = "Shift",
+	RightShift = "Shift",
+	ButtonX = "X",
+	ButtonY = "Y",
+	ButtonA = "A",
+	ButtonB = "B",
+	ButtonR1 = "RB",
+	ButtonR2 = "RT",
+	ButtonL1 = "LB",
+	ButtonL2 = "LT",
+	TouchTap = "Tap",
+	TouchHold = "Hold",
+	TouchDoubleTap = "Double Tap",
 }
 
--- Get keybind for current platform
-function KeybindConfig.GetKeybind(platform: string, action: string)
-	local platformKeybinds = KeybindConfig.Keybinds[platform]
-	if platformKeybinds then
-		return platformKeybinds[action]
+function KeybindConfig.GetKeybind(Platform: string, Action: string): (Enum.KeyCode | Enum.UserInputType | string)?
+	local PlatformKeybindData = KeybindConfig.Keybinds[Platform]
+	if PlatformKeybindData then
+		return (PlatformKeybindData :: any)[Action]
 	end
 	return nil
 end
 
--- Get display text for keybind
-function KeybindConfig.GetDisplayText(platform: string, action: string): string
-	local keybind = KeybindConfig.GetKeybind(platform, action)
-	if not keybind then return action end
-
-	-- Handle string keybinds (Mobile)
-	if type(keybind) == "string" then
-		local mobileDisplays = {
-			["TouchTap"] = "Tap",
-			["TouchHold"] = "Hold", 
-			["TouchDoubleTap"] = "Double Tap"
-		}
-		return mobileDisplays[keybind] or keybind
+function KeybindConfig.GetDisplayText(Platform: string, Action: string): string
+	local Keybind = KeybindConfig.GetKeybind(Platform, Action)
+	if not Keybind then
+		return Action
 	end
 
-	local enumName = keybind.Name
+	if type(Keybind) == "string" then
+		return DISPLAY_NAMES[Keybind] or Keybind
+	end
 
-	-- Custom overrides for better display names
-	local customDisplays = {
-		-- PC
-		["MouseButton1"] = "Left Click",
-		["MouseButton2"] = "Right Click",
-		["MouseButton3"] = "Middle Click",
-		["Return"] = "Enter",
-		["LeftShift"] = "Shift",
-		["RightShift"] = "Shift",
-
-		-- Controller  
-		["ButtonX"] = "X",
-		["ButtonY"] = "Y",
-		["ButtonA"] = "A",
-		["ButtonB"] = "B",
-		["ButtonR1"] = "RB",
-		["ButtonR2"] = "RT",
-		["ButtonL1"] = "LB",
-		["ButtonL2"] = "LT"
-	}
-
-	return customDisplays[enumName] or enumName
+	local EnumName = Keybind.Name
+	return DISPLAY_NAMES[EnumName] or EnumName
 end
 
 return KeybindConfig

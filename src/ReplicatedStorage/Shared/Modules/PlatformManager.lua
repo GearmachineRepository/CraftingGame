@@ -1,171 +1,124 @@
 --!strict
 local UserInputService = game:GetService("UserInputService")
 local GuiService = game:GetService("GuiService")
-local RunService = game:GetService("RunService")
 
 local PlatformManager = {}
 
--- State
 local CurrentPlatform: string = "PC"
-local Callbacks: {(string) -> ()} = {}
+local PlatformCallbacks: {(string) -> ()} = {}
 local LastInputTime: number = 0
-local INPUT_SWITCH_COOLDOWN: number = 2 -- Prevent rapid switching for 2 seconds
 
--- Platform Detection
-local function DetectPlatform(): string
+local INPUT_SWITCH_COOLDOWN: number = 2
+local JOYSTICK_DEADZONE: number = 0.3
+
+local function DetectInitialPlatform(): string
 	if GuiService:IsTenFootInterface() then
 		return "Controller"
 	elseif UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
 		return "Mobile"
-	else
-		return "PC"
 	end
-end
-
--- Dynamic input device detection (more aggressive than platform detection)
-local function DetectActiveInputDevice(): string
-	-- Check for gamepad first
-	local ConnectedGamepads = UserInputService:GetConnectedGamepads()
-	if #ConnectedGamepads > 0 then
-		return "Controller"
-	end
-
-	-- Check for touch
-	if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-		return "Mobile"
-	end
-
-	-- Default to PC
 	return "PC"
 end
 
--- Update platform and notify subscribers
-local function UpdatePlatform(newPlatform: string): ()
-	if newPlatform ~= CurrentPlatform then
-		local oldPlatform = CurrentPlatform
-		CurrentPlatform = newPlatform
-
-		--print("PlatformManager: Platform changed from", oldPlatform, "to", newPlatform)
-
-		-- Notify all subscribers
-		for _, callback in pairs(Callbacks) do
-			task.spawn(callback, newPlatform)
-		end
-	end
-end
-
--- Check for platform changes (with cooldown to prevent rapid switching)
-local function CheckPlatformChange(): ()
-	local currentTime = tick()
-	if currentTime - LastInputTime > INPUT_SWITCH_COOLDOWN then
-		local detectedPlatform = DetectActiveInputDevice()
-		if detectedPlatform ~= CurrentPlatform then
-			UpdatePlatform(detectedPlatform)
-			LastInputTime = currentTime
-		end
-	end
-end
-
--- Handle input-based platform detection (add joystick support)
-local function OnInputBegan(input: InputObject): ()
-	local currentTime = tick()
-
-	-- Only check for platform switches after cooldown
-	if currentTime - LastInputTime < INPUT_SWITCH_COOLDOWN then
+local function UpdatePlatform(NewPlatform: string)
+	if NewPlatform == CurrentPlatform then
 		return
 	end
 
-	-- Detect controller input (including joysticks)
-	local IsGamepadInput = input.UserInputType == Enum.UserInputType.Gamepad1 or 
-		string.find(tostring(input.KeyCode), "Button") or
-		string.find(tostring(input.KeyCode), "Thumbstick")
+	CurrentPlatform = NewPlatform
 
-	-- Detect keyboard/mouse input                  
-	local IsKeyboardInput = input.UserInputType == Enum.UserInputType.Keyboard
-	local IsMouseInput = input.UserInputType == Enum.UserInputType.MouseButton1 or 
-		input.UserInputType == Enum.UserInputType.MouseButton2 or
-		input.UserInputType == Enum.UserInputType.MouseWheel
+	for _, Callback in PlatformCallbacks do
+		task.spawn(Callback, NewPlatform)
+	end
+end
 
-	-- Switch platform based on intentional input
-	if IsGamepadInput and CurrentPlatform ~= "Controller" then
+local function OnInputBegan(InputData: InputObject)
+	local CurrentTime = tick()
+
+	if CurrentTime - LastInputTime < INPUT_SWITCH_COOLDOWN then
+		return
+	end
+
+	local IsGamepadInput = InputData.UserInputType == Enum.UserInputType.Gamepad1
+		or string.find(tostring(InputData.KeyCode), "Button") ~= nil
+		or string.find(tostring(InputData.KeyCode), "Thumbstick") ~= nil
+
+	local IsKeyboardInput = InputData.UserInputType == Enum.UserInputType.Keyboard
+	local IsMouseInput = InputData.UserInputType == Enum.UserInputType.MouseButton1
+		or InputData.UserInputType == Enum.UserInputType.MouseButton2
+		or InputData.UserInputType == Enum.UserInputType.MouseWheel
+
+	if IsGamepadInput and CurrentPlatform ~= "Controller" :: string then
+		LastInputTime = CurrentTime
 		UpdatePlatform("Controller")
-	elseif (IsKeyboardInput or IsMouseInput) then
+	elseif (IsKeyboardInput or IsMouseInput) and CurrentPlatform ~= "PC" :: string then
+		LastInputTime = CurrentTime
 		UpdatePlatform("PC")
 	end
 end
 
--- Add InputChanged detection for joystick movements
-local function OnInputChanged(input: InputObject): ()
-	local currentTime = tick()
+local function OnInputChanged(InputData: InputObject)
+	local CurrentTime = tick()
 
-	-- Only check for platform switches after cooldown
-	if currentTime - LastInputTime < INPUT_SWITCH_COOLDOWN then
+	if CurrentTime - LastInputTime < INPUT_SWITCH_COOLDOWN then
 		return
 	end
 
-	-- Detect joystick movement (only significant movement to avoid noise)
-	if input.KeyCode == Enum.KeyCode.Thumbstick1 or input.KeyCode == Enum.KeyCode.Thumbstick2 then
-		local magnitude = input.Position.Magnitude
-		if magnitude > 0.3 then -- Only detect significant joystick movement
-			if CurrentPlatform ~= "Controller" then
-				UpdatePlatform("Controller")
-			end
+	local IsThumbstick = InputData.KeyCode == Enum.KeyCode.Thumbstick1
+		or InputData.KeyCode == Enum.KeyCode.Thumbstick2
+
+	if IsThumbstick then
+		local Magnitude = InputData.Position.Magnitude
+		if Magnitude > JOYSTICK_DEADZONE and CurrentPlatform ~= "Controller" then
+			LastInputTime = CurrentTime
+			UpdatePlatform("Controller")
 		end
 	end
 end
 
--- Public API
 function PlatformManager.GetPlatform(): string
 	return CurrentPlatform
 end
 
-function PlatformManager.OnPlatformChanged(callback: (string) -> ()): ()
-	table.insert(Callbacks, callback)
+function PlatformManager.OnPlatformChanged(Callback: (string) -> ())
+	table.insert(PlatformCallbacks, Callback)
 end
 
-function PlatformManager.RemovePlatformChangeCallback(callback: (string) -> ()): ()
-	for i, existingCallback in pairs(Callbacks) do
-		if existingCallback == callback then
-			table.remove(Callbacks, i)
-			break
-		end
+function PlatformManager.RemovePlatformChangeCallback(Callback: (string) -> ())
+	local Index = table.find(PlatformCallbacks, Callback)
+	if Index then
+		table.remove(PlatformCallbacks, Index)
 	end
 end
 
-function PlatformManager.ForcePlatformUpdate(): ()
-	local detectedPlatform = DetectActiveInputDevice()
-	UpdatePlatform(detectedPlatform)
+function PlatformManager.ForcePlatformUpdate()
+	local DetectedPlatform = DetectInitialPlatform()
+	UpdatePlatform(DetectedPlatform)
 end
 
--- Initialize
-local function Initialize(): ()
-	-- Set initial platform
-	CurrentPlatform = DetectPlatform()
+local function Initialize()
+	CurrentPlatform = DetectInitialPlatform()
 
-	-- Connect input monitoring
 	UserInputService.InputBegan:Connect(OnInputBegan)
 	UserInputService.InputChanged:Connect(OnInputChanged)
 
-	-- Monitor gamepad connections (with delay for system registration)
 	UserInputService.GamepadConnected:Connect(function()
 		task.wait(0.1)
-		local currentTime = tick()
-		if currentTime - LastInputTime > INPUT_SWITCH_COOLDOWN then
+		local CurrentTime = tick()
+		if CurrentTime - LastInputTime > INPUT_SWITCH_COOLDOWN then
+			LastInputTime = CurrentTime
 			UpdatePlatform("Controller")
 		end
 	end)
 
 	UserInputService.GamepadDisconnected:Connect(function()
 		task.wait(0.1)
-		local currentTime = tick()
-		if currentTime - LastInputTime > INPUT_SWITCH_COOLDOWN then
+		local CurrentTime = tick()
+		if CurrentTime - LastInputTime > INPUT_SWITCH_COOLDOWN then
+			LastInputTime = CurrentTime
 			UpdatePlatform("PC")
 		end
 	end)
-	
-	--Debugging
-	--print("PlatformManager initialized. Current platform:", CurrentPlatform)
-	--print("Connected gamepads:", #UserInputService:GetConnectedGamepads())
 end
 
 Initialize()
